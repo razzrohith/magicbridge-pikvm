@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MagicBridgeV2 · Stealth Control</title>
+<style>
+:root{
+  --bg:#04070c; --panel:#0a1119; --panel2:#070d14; --line:#123240;
+  --cyan:#00e5ff; --violet:#b026ff; --txt:#dff6fb; --sub:#6f93a3;
+  --ok:#39d98a; --warn:#ffcf5c; --bad:#ff5c7a;
+}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;color:var(--txt);
+  font-family:"SFMono-Regular",ui-monospace,Menlo,Consolas,monospace;
+  background:
+    radial-gradient(900px 500px at 15% -10%, rgba(0,229,255,.10), transparent 60%),
+    radial-gradient(900px 500px at 100% 0%, rgba(176,38,255,.10), transparent 55%),
+    #04070c;}
+a{color:var(--cyan);text-decoration:none}
+.wrap{max-width:1080px;margin:0 auto;padding:22px 20px 60px}
+/* header */
+.hdr{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;
+  border-bottom:1px solid rgba(0,229,255,.18);padding-bottom:16px;margin-bottom:20px}
+.brand{display:flex;align-items:center;gap:12px}
+.mark{width:40px;height:40px;border-radius:9px;border:1px solid rgba(0,229,255,.5);
+  display:grid;place-items:center;font-weight:800;color:var(--cyan);
+  box-shadow:0 0 18px rgba(0,229,255,.35),inset 0 0 14px rgba(0,229,255,.12);letter-spacing:1px}
+.brand h1{margin:0;font-size:16px;letter-spacing:3px;text-transform:uppercase}
+.brand small{color:var(--sub);letter-spacing:2px;font-size:10px;text-transform:uppercase}
+.hdr .right{display:flex;align-items:center;gap:14px}
+.ping{display:inline-flex;align-items:center;gap:7px;font-size:11px;letter-spacing:1.5px;color:var(--sub);text-transform:uppercase}
+.ping i{width:9px;height:9px;border-radius:50%;background:var(--ok);box-shadow:0 0 10px var(--ok);animation:p 2s infinite}
+@keyframes p{50%{opacity:.3}}
+.back{font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:var(--sub);border:1px solid var(--line);
+  padding:8px 12px;border-radius:8px;border-color:rgba(0,229,255,.25)}
+.back:hover{color:var(--cyan);box-shadow:0 0 12px rgba(0,229,255,.25)}
+/* layout */
+.grid{display:grid;grid-template-columns:1.2fr 1fr;gap:16px}
+@media(max-width:840px){.grid{grid-template-columns:1fr}}
+.card{background:linear-gradient(180deg,var(--panel),var(--panel2));
+  border:1px solid rgba(0,229,255,.16);border-radius:14px;padding:16px 16px 18px;position:relative;
+  box-shadow:0 0 0 1px rgba(0,0,0,.3), 0 18px 40px rgba(0,0,0,.35)}
+.card:before{content:"";position:absolute;inset:0;border-radius:14px;pointer-events:none;
+  box-shadow:inset 0 0 22px rgba(0,229,255,.06);animation:breath 4s ease-in-out infinite}
+@keyframes breath{50%{box-shadow:inset 0 0 30px rgba(176,38,255,.10)}}
+.card h2{margin:0 0 4px;font-size:12px;letter-spacing:2.5px;text-transform:uppercase;color:var(--cyan)}
+.card p.hint{margin:0 0 12px;color:var(--sub);font-size:11px;letter-spacing:.4px;line-height:1.5}
+/* preset chips */
+.presets{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px}
+.preset{border:1px solid var(--line);border-color:rgba(0,229,255,.18);border-radius:9px;padding:9px 10px;cursor:pointer;
+  display:flex;flex-direction:column;gap:3px;transition:.15s;background:rgba(0,229,255,.02)}
+.preset:hover{border-color:var(--cyan);box-shadow:0 0 12px rgba(0,229,255,.2)}
+.preset.sel{border-color:var(--violet);box-shadow:0 0 14px rgba(176,38,255,.3);background:rgba(176,38,255,.06)}
+.preset b{font-size:12px;letter-spacing:.4px}
+.preset .vf{font-size:9.5px;letter-spacing:1px;text-transform:uppercase}
+.vf.yes{color:var(--ok)} .vf.no{color:var(--warn)}
+/* fields */
+.row{display:flex;gap:10px;flex-wrap:wrap;margin:9px 0}
+label.f{display:flex;flex-direction:column;gap:5px;flex:1;min-width:120px;font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:var(--sub)}
+input,select{background:#050b12;border:1px solid rgba(0,229,255,.2);color:var(--txt);border-radius:8px;
+  padding:9px 10px;font:inherit;font-size:13px;width:100%}
+input:focus,select:focus{outline:none;border-color:var(--cyan);box-shadow:0 0 0 3px rgba(0,229,255,.12)}
+button{font-family:inherit;cursor:pointer;border:0;border-radius:8px;padding:10px 15px;font-size:11px;
+  letter-spacing:1.5px;text-transform:uppercase;font-weight:700}
+.btn{background:linear-gradient(90deg,var(--cyan),#28c9e6);color:#02121a;box-shadow:0 0 16px rgba(0,229,255,.25)}
+.btn:hover{filter:brightness(1.1)}
+.btn.v{background:linear-gradient(90deg,var(--violet),#8f2bff);color:#fff;box-shadow:0 0 16px rgba(176,38,255,.3)}
+.btn.ghost{background:transparent;border:1px solid rgba(0,229,255,.3);color:var(--txt)}
+.kv{display:flex;justify-content:space-between;gap:10px;padding:7px 0;border-bottom:1px dashed var(--line);border-color:rgba(0,229,255,.12);font-size:12px}
+.kv:last-child{border:0}.kv span{color:var(--sub);letter-spacing:.5px}
+.tag{font-size:9.5px;letter-spacing:1px;text-transform:uppercase;padding:2px 8px;border-radius:5px;border:1px solid}
+.tag.ok{color:var(--ok);border-color:rgba(57,217,138,.4)}
+.tag.no{color:var(--warn);border-color:rgba(255,207,92,.4)}
+.switch{display:flex;align-items:center;gap:10px}
+.full{grid-column:1/-1}
+#toast{position:fixed;right:18px;bottom:18px;display:flex;flex-direction:column;gap:8px;z-index:60}
+.t{background:#08131c;border:1px solid rgba(0,229,255,.3);border-left:3px solid var(--cyan);padding:10px 14px;
+  border-radius:9px;font-size:12px;letter-spacing:.4px;box-shadow:0 10px 30px rgba(0,0,0,.5);max-width:320px}
+.t.bad{border-left-color:var(--bad)} .t.ok{border-left-color:var(--ok)}
+.note{font-size:10.5px;color:var(--sub);letter-spacing:.4px;line-height:1.5;margin-top:8px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="hdr">
+    <div class="brand">
+      <div class="mark">M</div>
+      <div><h1>Stealth Control</h1><small>MagicBridgeV2 · spoofing suite</small></div>
+    </div>
+    <div class="right">
+      <span class="ping"><i></i> system online</span>
+      <a class="back" href="/mb/ui/">◂ Console</a>
+    </div>
+  </div>
+
+  <div class="grid">
+    <!-- USB IDENTITY -->
+    <div class="card">
+      <h2>USB Identity Spoofing</h2>
+      <p class="hint">What the target PC sees the Pi as. Applying rebuilds the USB gadget (kvmd-otg) — briefly re-plugs the emulated device.</p>
+      <div class="presets" id="presets"></div>
+      <div class="row">
+        <label class="f">Vendor ID<input id="vid" placeholder="0x046D"></label>
+        <label class="f">Product ID<input id="pid" placeholder="0xC52B"></label>
+      </div>
+      <div class="row">
+        <label class="f">Manufacturer<input id="mfr" placeholder="Logitech"></label>
+        <label class="f">Product<input id="prod" placeholder="USB Receiver"></label>
+      </div>
+      <div class="row">
+        <label class="f">Serial<input id="serial" placeholder="auto / leave blank"></label>
+      </div>
+      <div class="row">
+        <button class="btn" onclick="applyIdentity()">Apply identity</button>
+        <button class="btn v" onclick="randSerial()">Randomise serial</button>
+      </div>
+      <div class="note" id="verifyNote"></div>
+    </div>
+
+    <!-- CURRENT + SAFE MODE -->
+    <div class="card">
+      <h2>Active Gadget</h2>
+      <div id="identInfo"></div>
+      <div class="row switch" style="margin-top:14px">
+        <label class="f" style="flex:0 0 auto">Safe mode
+          <select id="safe"><option value="false">Disabled</option><option value="true">Enabled</option></select>
+        </label>
+        <button class="btn ghost" onclick="setSafe()" style="align-self:flex-end">Set</button>
+      </div>
+      <p class="note">Safe mode trims non-essential USB interfaces. Function-level trimming is validated on the V4 Mini.</p>
+    </div>
+
+    <!-- MAC SPOOFING -->
+    <div class="card">
+      <h2>MAC Address Spoofing</h2>
+      <p class="hint">Change the network hardware address. Persists across reboot via MagicBridge config.</p>
+      <div class="row">
+        <label class="f">Interface<input id="macIf" value="wlan0"></label>
+        <label class="f">MAC<input id="macVal" placeholder="02:aa:bb:cc:dd:ee"></label>
+      </div>
+      <div class="row">
+        <button class="btn" onclick="macApply(false)">Apply</button>
+        <button class="btn v" onclick="macApply(true)">Randomise</button>
+      </div>
+      <div class="kv"><span>Current</span><b id="macCur">—</b></div>
+    </div>
+
+    <!-- EDID -->
+    <div class="card">
+      <h2>Monitor Identity (EDID)</h2>
+      <p class="hint">What monitor the target thinks is attached. Handled natively by kvmd (edidconf) on the V4 Mini.</p>
+      <div class="kv"><span>Source</span><b>kvmd edidconf</b></div>
+      <div class="kv"><span>Status</span><b><span class="tag ok">native</span></b></div>
+      <p class="note">EDID spoofing ships working on PiKVM hardware. Presets/clone are configured on-device once the V4 Mini is connected to a target.</p>
+    </div>
+
+    <!-- STATUS -->
+    <div class="card full">
+      <h2>Stealth Status</h2>
+      <div class="row" style="gap:24px">
+        <div class="kv" style="flex:1"><span>kvmd-otg</span><b id="stOtg">—</b></div>
+        <div class="kv" style="flex:1"><span>Override present</span><b id="stOv">—</b></div>
+        <div class="kv" style="flex:1"><span>Tailscale</span><b id="stTs">—</b></div>
+      </div>
+    </div>
+  </div>
+</div>
+<div id="toast"></div>
+
+<script>
+const $=s=>document.querySelector(s);
+const MB="/mb";
+function toast(m,k=""){const t=document.createElement("div");t.className="t "+k;t.textContent=m;
+  document.getElementById("toast").appendChild(t);setTimeout(()=>t.remove(),4200);}
+async function jget(u){const r=await fetch(u,{credentials:"include"});return r.json();}
+async function jpost(u,b){const r=await fetch(u,{method:"POST",credentials:"include",
+  headers:{"content-type":"application/json"},body:b?JSON.stringify(b):null});return r.json();}
+let PRESETS={};
+function toHex(n){return n?("0x"+Number(n).toString(16).toUpperCase()):"";}
+
+async function loadIdentity(){
+  const r=await jget(MB+"/stealth/identity");
+  PRESETS=r.presets||{};
+  const box=$("#presets");box.innerHTML="";
+  const cur=r.current||{};
+  Object.entries(PRESETS).forEach(([k,v])=>{
+    const d=document.createElement("div");
+    d.className="preset"+(cur.preset===k?" sel":"");d.dataset.k=k;
+    d.innerHTML=`<b>${v.label}</b><span class="vf ${v.verified?'yes':'no'}">${v.verified?'✓ verified':'⚠ unverified'}</span>`;
+    d.onclick=()=>selectPreset(k);
+    box.appendChild(d);
+  });
+  $("#vid").value=toHex(cur.vendor_id);$("#pid").value=toHex(cur.product_id);
+  $("#mfr").value=cur.manufacturer||"";$("#prod").value=cur.product||"";$("#serial").value=cur.serial||"";
+  $("#safe").value=String(!!cur.safe_mode);
+  $("#identInfo").innerHTML=`<div class="kv"><span>Label</span><b>${cur.label||'—'}</b></div>
+    <div class="kv"><span>VID:PID</span><b>${toHex(cur.vendor_id)}:${toHex(cur.product_id)}</b></div>
+    <div class="kv"><span>Serial</span><b>${cur.serial||'—'}</b></div>
+    <div class="kv"><span>Verified</span><b>${cur.verified?'<span class="tag ok">yes</span>':'<span class="tag no">no</span>'}</b></div>`;
+}
+function selectPreset(k){
+  document.querySelectorAll(".preset").forEach(x=>x.classList.toggle("sel",x.dataset.k===k));
+  const v=PRESETS[k];if(!v)return;
+  $("#vid").value=toHex(v.vendor_id);$("#pid").value=toHex(v.product_id);
+  $("#mfr").value=v.manufacturer||"";$("#prod").value=v.product||"";
+  $("#verifyNote").textContent=v.verified?"":"⚠ This preset is researched but not hardware-verified against a real device descriptor.";
+}
+function selectedPreset(){const el=document.querySelector(".preset.sel");return el?el.dataset.k:null;}
+async function applyIdentity(){
+  const body={preset:selectedPreset(),serial:$("#serial").value||null,
+    vendor_id:$("#vid").value,product_id:$("#pid").value,manufacturer:$("#mfr").value,product:$("#prod").value};
+  toast("Applying identity — rebuilding gadget…");
+  const r=await jpost(MB+"/stealth/identity",body);
+  toast(r.ok?"Identity applied ✓":("Apply failed: "+(r.error||r.detail||"error")),r.ok?"ok":"bad");
+  loadIdentity();loadStatus();
+}
+async function randSerial(){const r=await jpost(MB+"/stealth/serial/random");
+  toast(r.ok?("Serial → "+r.serial):"Failed",r.ok?"ok":"bad");loadIdentity();}
+async function setSafe(){const on=$("#safe").value==="true";const r=await jpost(MB+"/stealth/safe-mode",{on});
+  toast("Safe mode "+(on?"enabled":"disabled"),"ok");}
+
+async function macApply(random){
+  const r=await jpost(MB+"/net/mac",{iface:$("#macIf").value,mac:$("#macVal").value,random});
+  toast(r.ok?("MAC → "+r.mac):("MAC failed: "+(r.detail||r.error||"")),r.ok?"ok":"bad");
+  $("#macCur").textContent=r.mac||"—";
+}
+
+async function loadStatus(){
+  try{const s=await jget(MB+"/stealth/status");
+    $("#stOtg").textContent=s.kvmd_otg||"—";
+    $("#stOv").textContent=s.override_present?"yes":"no";
+  }catch{$("#stOtg").textContent="n/a";}
+  try{const n=await jget(MB+"/net/status");
+    $("#stTs").textContent=n.tailscale&&n.tailscale.up?"up":"down";
+    if(n.mac&&n.mac.mac)$("#macCur").textContent=n.mac.mac;
+  }catch{$("#stTs").textContent="n/a";}
+}
+
+loadIdentity();loadStatus();
+</script>
+</body>
+</html>

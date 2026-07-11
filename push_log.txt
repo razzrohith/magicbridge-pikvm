@@ -10,36 +10,29 @@ warning: in the working copy of 'branding/apply_branding.py', LF will be replace
 warning: in the working copy of 'branding/branding.env', LF will be replaced by CRLF the next time Git touches it
 warning: in the working copy of 'branding/mb-mdns-alias.sh', LF will be replaced by CRLF the next time Git touches it
 warning: in the working copy of 'branding/motd', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'docs/FEATURES.md', LF will be replaced by CRLF the next time Git touches it
 warning: in the working copy of 'docs/PORTING.md', LF will be replaced by CRLF the next time Git touches it
 warning: in the working copy of 'kvmd-overrides/override.d/00-magicbridge.yaml', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'magic-install.sh', LF will be replaced by CRLF the next time Git touches it
 warning: in the working copy of 'nginx/magicbridge.conf', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'services/common/kvmd_client.py', LF will be replaced by CRLF the next time Git touches it
 warning: in the working copy of 'services/common/mbcommon.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'services/magicbridge-agent/app.py', LF will be replaced by CRLF the next time Git touches it
 warning: in the working copy of 'services/magicbridge-net/app.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'services/magicbridge-stealth/app.py', LF will be replaced by CRLF the next time Git touches it
 warning: in the working copy of 'services/requirements.txt', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'systemd/magicbridge-agent.service', LF will be replaced by CRLF the next time Git touches it
 warning: in the working copy of 'systemd/magicbridge-net.service', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'systemd/magicbridge-stealth.service', LF will be replaced by CRLF the next time Git touches it
 warning: in the working copy of 'systemd/mb-mdns-alias.service', LF will be replaced by CRLF the next time Git touches it
 warning: in the working copy of 'tools/push_to_github.py', LF will be replaced by CRLF the next time Git touches it
-warning: in the working copy of 'web/theme.generated.css', LF will be replaced by CRLF the next time Git touches it
-warning: in the working copy of 'docs/FEATURES.md', LF will be replaced by CRLF the next time Git touches it
-warning: in the working copy of 'services/common/kvmd_client.py', LF will be replaced by CRLF the next time Git touches it
-warning: in the working copy of 'services/magicbridge-agent/app.py', LF will be replaced by CRLF the next time Git touches it
-warning: in the working copy of 'services/magicbridge-stealth/app.py', LF will be replaced by CRLF the next time Git touches it
-warning: in the working copy of 'systemd/magicbridge-agent.service', LF will be replaced by CRLF the next time Git touches it
-warning: in the working copy of 'systemd/magicbridge-stealth.service', LF will be replaced by CRLF the next time Git touches it
 warning: in the working copy of 'web/index.html', LF will be replaced by CRLF the next time Git touches it
-> git commit -m full feature layer: stealth, agent, net, kvmd client, web UI
-[main 86feaae] full feature layer: stealth, agent, net, kvmd client, web UI
- 11 files changed, 1006 insertions(+), 24 deletions(-)
- create mode 100644 docs/FEATURES.md
- create mode 100644 push_log.txt
- create mode 100644 services/common/kvmd_client.py
- create mode 100644 services/magicbridge-agent/app.py
- create mode 100644 services/magicbridge-stealth/app.py
- create mode 100644 systemd/magicbridge-agent.service
- create mode 100644 systemd/magicbridge-stealth.service
- create mode 100644 web/index.html
+warning: in the working copy of 'web/theme.generated.css', LF will be replaced by CRLF the next time Git touches it
+> git commit -m audit fixes: read-only-rootfs config storage, error handling, installer state dir + kvmd creds
+[main e0c20a4] audit fixes: read-only-rootfs config storage, error handling, installer state dir + kvmd creds
+ 5 files changed, 144 insertions(+), 88 deletions(-)
 > git push -u origin main
 branch 'main' set up to track 'origin/main'.
 To https://github.com/razzrohith/MagicBridgeV2.git
-   985218f..86feaae  main -> main
+   86feaae..e0c20a4  main -> main
 DONE. Pushed to https://github.com/razzrohith/MagicBridgeV2.git branch main

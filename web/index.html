@@ -78,7 +78,7 @@ button.bad{background:linear-gradient(90deg,#ff7a7a,#ff5252);color:#2a0000}
     </div>
     <nav class="nav" id="nav">
       <button data-p="screen" class="active"><span class="dot"></span>Screen</button>
-      <button data-p="identity"><span class="dot"></span>Identity</button>
+      <button data-p="stealth"><span class="dot"></span>Stealth &#9656;</button>
       <button data-p="network"><span class="dot"></span>Network</button>
       <button data-p="agent"><span class="dot"></span>AI Agent</button>
       <button data-p="system"><span class="dot"></span>System</button>
@@ -186,15 +186,9 @@ button.bad{background:linear-gradient(90deg,#ff7a7a,#ff5252);color:#2a0000}
           <div class="row"><button class="btn" onclick="duckdns()">Update &amp; save</button></div>
         </div>
         <div class="card">
-          <h3>MAC address</h3>
-          <div class="row">
-            <label class="f">Interface<input id="mac_if" value="wlan0"></label>
-            <label class="f">MAC<input id="mac_val" placeholder="02:aa:bb:cc:dd:ee"></label>
-          </div>
-          <div class="row">
-            <button class="btn" onclick="macApply(false)">Apply</button>
-            <button class="ghost btn" onclick="macApply(true)">Randomise</button>
-          </div>
+          <h3>Stealth</h3>
+          <div class="muted">USB identity &amp; MAC spoofing live on the dedicated Stealth Control panel.</div>
+          <div class="row"><button class="btn" onclick="location.href='/stealth/'">Open Stealth Control &#9656;</button></div>
         </div>
       </div>
     </section>
@@ -258,10 +252,11 @@ async function jpost(u,b){const r=await fetch(u,{method:"POST",credentials:"incl
 // ---- nav ------------------------------------------------------------
 const titles={screen:"Screen & Control",identity:"USB Identity",network:"Network",agent:"AI Agent",system:"System"};
 $$("#nav button").forEach(b=>b.onclick=()=>{
+  if(b.dataset.p==="stealth"){location.href="/stealth/";return;}   // dedicated Stealth Control page
   $$("#nav button").forEach(x=>x.classList.remove("active"));b.classList.add("active");
   const p=b.dataset.p;$$(".page").forEach(x=>x.classList.toggle("active",x.dataset.page===p));
   $("#ptitle").textContent=titles[p];
-  if(p==="identity")loadIdentity();if(p==="network")loadNetwork();if(p==="agent")loadAgent();if(p==="system")loadSystem();
+  if(p==="network")loadNetwork();if(p==="agent")loadAgent();if(p==="system")loadSystem();
 });
 
 // ---- screen ---------------------------------------------------------
