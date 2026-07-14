@@ -102,10 +102,16 @@ phase1_fetch() {
 # =====================================================================
 phase2_deps() {
   say "Phase 2 — add-on dependencies"
-  # kvmd's own venv already has aiohttp etc. Keep our footprint tiny.
-  # Only install what our sidecars need and PiKVM doesn't already provide.
-  run "python3 -m pip install --quiet --break-system-packages -r '$INSTALL_ROOT/services/requirements.txt' || true"
-  ok "dependencies ready"
+  # PiKVM's system python already ships aiohttp + pyyaml (kvmd uses them) and has
+  # NO pip. So only attempt an install if a dep is genuinely missing AND pip exists.
+  if python3 -c "import aiohttp, yaml" 2>/dev/null; then
+    ok "dependencies already present (aiohttp, pyyaml)"
+  elif python3 -m pip --version >/dev/null 2>&1; then
+    run "python3 -m pip install --quiet --break-system-packages -r '$INSTALL_ROOT/services/requirements.txt' || true"
+    ok "dependencies installed via pip"
+  else
+    warn "some deps missing and pip unavailable — services may need manual deps"
+  fi
 }
 
 # =====================================================================
@@ -153,13 +159,20 @@ phase4_services() {
 # =====================================================================
 phase5_wire() {
   say "Phase 5 — wire nginx + kvmd overrides"
-  # our extra location blocks, included by kvmd's nginx
+  # our extra location blocks (served by kvmd's OWN nginx, not the stock /etc/nginx)
   run "install -Dm644 '$INSTALL_ROOT/nginx/magicbridge.conf' /etc/kvmd/nginx/magicbridge.conf"
-  # kvmd override.d — set our defaults (h264 video, edid, etc.) without editing kvmd files
+  # kvmd override.d — our defaults, without editing kvmd's files
   run "install -Dm644 '$INSTALL_ROOT/kvmd-overrides/override.d/00-magicbridge.yaml' /etc/kvmd/override.d/00-magicbridge.yaml"
-  # validate before reloading — never blind-reload
-  if [ "$DRY_RUN" = 0 ]; then nginx -t || die "nginx config test failed — not reloading"; fi
-  ok "nginx + kvmd overrides in place (validated)"
+  # PiKVM builds its nginx config from a Mako template. Include our block inside the
+  # HTTPS (:443) server, right after the ssl.conf include. Do NOT run `nginx -t` on
+  # the stock /etc/nginx.conf — it fails on PiKVM (missing /var/log/nginx paths).
+  local mako=/etc/kvmd/nginx/nginx.conf.mako
+  if [ -f "$mako" ] && ! grep -q 'magicbridge.conf' "$mako"; then
+    run "sed -i '/nginx\\/ssl\\.conf;/a include /etc/kvmd/nginx/magicbridge.conf;' '$mako'"
+  fi
+  # kvmd-nginx regenerates + validates its config on restart — that's the correct gate
+  run "systemctl restart kvmd-nginx || true"
+  ok "nginx wired into kvmd Mako template + kvmd-nginx restarted"
 }
 
 # =====================================================================
@@ -167,14 +180,15 @@ phase5_wire() {
 # =====================================================================
 phase6_enable() {
   say "Phase 6 — enable MagicBridgeV2"
+  # mDNS so magicbridge.local resolves (PiKVM ships avahi masked/off by default)
+  run "systemctl unmask avahi-daemon.service avahi-daemon.socket 2>/dev/null || true"
+  run "systemctl enable --now avahi-daemon.service 2>/dev/null || true"
   run "systemctl enable --now mb-mdns-alias.service || true"
   for svc in magicbridge-net magicbridge-stealth magicbridge-agent; do
     [ -f "/etc/systemd/system/${svc}.service" ] && run "systemctl enable --now '${svc}.service' || true"
   done
-  # reload kvmd + nginx to pick up overrides
-  run "systemctl reload-or-restart kvmd-nginx || true"
   run "systemctl try-restart kvmd || true"
-  run "systemctl restart kvmd-oled || true"
+  run "systemctl restart kvmd-oled 2>/dev/null || true"
   ok "MagicBridgeV2 enabled"
 }
 

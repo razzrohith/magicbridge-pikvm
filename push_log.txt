@@ -26,14 +26,13 @@ warning: in the working copy of 'systemd/magicbridge-stealth.service', LF will b
 warning: in the working copy of 'systemd/mb-mdns-alias.service', LF will be replaced by CRLF the next time Git touches it
 warning: in the working copy of 'tools/push_to_github.py', LF will be replaced by CRLF the next time Git touches it
 warning: in the working copy of 'web/index.html', LF will be replaced by CRLF the next time Git touches it
-warning: in the working copy of 'web/theme.generated.css', LF will be replaced by CRLF the next time Git touches it
 warning: in the working copy of 'web/stealth/index.html', LF will be replaced by CRLF the next time Git touches it
-> git commit -m dedicated Stealth Control page (USB identity + MAC + EDID), nginx route, main UI repointed
-[main 62a90ab] dedicated Stealth Control page (USB identity + MAC + EDID), nginx route, main UI repointed
- 4 files changed, 269 insertions(+), 30 deletions(-)
- create mode 100644 web/stealth/index.html
+warning: in the working copy of 'web/theme.generated.css', LF will be replaced by CRLF the next time Git touches it
+> git commit -m professional UI redesign: rich cockpit (all features) + restyled stealth + wifi/tailscale endpoints
+[main 3624118] professional UI redesign: rich cockpit (all features) + restyled stealth + wifi/tailscale endpoints
+ 4 files changed, 453 insertions(+), 410 deletions(-)
 > git push -u origin main
 branch 'main' set up to track 'origin/main'.
 To https://github.com/razzrohith/MagicBridgeV2.git
-   e0c20a4..62a90ab  main -> main
+   62a90ab..3624118  main -> main
 DONE. Pushed to https://github.com/razzrohith/MagicBridgeV2.git branch main
