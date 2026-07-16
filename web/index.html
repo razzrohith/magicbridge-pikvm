@@ -427,7 +427,6 @@ button.btn.danger:hover{background:rgba(229,83,75,.1)}
 </div>
 <div id="toast"></div>
 
-<script src="janus.js"></script>
 <script>
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 const KVMD="/api", MB="/mb";
@@ -489,13 +488,20 @@ function JanusStreamer(videoEl,onActive,onInfo){
       else if(!added&&reason==="ended"){if(videoEl.srcObject){try{videoEl.srcObject.removeTrack(track);}catch(e){}}}},
   });}
 }
-function ensureJanusInit(cb){if(!window.Janus)return cb(false);
-  if(window.Janus.isWebrtcSupported&&window.Janus.isWebrtcSupported()===false)return cb(false);
-  if(window.__janusInited)return cb(true);
-  window.Janus.init({debug:false,callback:function(){window.__janusInited=true;cb(true);}});}
+/* Load kvmd's OWN Janus client (matches the running gateway version exactly —
+   this is the same module the native /kvm/ view uses, so WebRTC actually works). */
+async function ensureJanusInit(cb){
+  try{
+    if(!window.Janus){const mod=await import("/share/js/kvm/janus.js");window.Janus=mod.Janus;}
+    if(!window.RTCPeerConnection)return cb(false);
+    if(window.__janusInited)return cb(true);
+    window.Janus.init({debug:false,callback:function(){window.__janusInited=true;cb(true);}});
+  }catch(e){tools_log("janus import failed",e);cb(false);}
+}
+function tools_log(){try{console.warn.apply(console,arguments);}catch(e){}}
 function setTransport(){const t=$("#transport").value;if(t===transport)return;
   if(t==="webrtc"){
-    if(!window.Janus||!window.RTCPeerConnection){toast("WebRTC not available in this browser","bad");$("#transport").value="mjpeg";return;}
+    if(!window.RTCPeerConnection){toast("WebRTC not supported in this browser","bad");$("#transport").value="mjpeg";return;}
     startWebrtc();
   }else{stopWebrtc();}}
 function startWebrtc(){transport="webrtc";webrtcUp=false;
