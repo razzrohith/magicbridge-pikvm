@@ -386,6 +386,49 @@ async def tailscale_funnel(request):
     return web.json_response({"ok": rc == 0, "on": on, "detail": out[-1500:]})
 
 
+async def led_get(_):
+    """GET /mb/net/led — state of the board activity LED."""
+    import glob
+    leds = sorted(glob.glob("/sys/class/leds/*ACT*") + glob.glob("/sys/class/leds/led0"))
+    on = None
+    if leds:
+        try:
+            on = int(open(leds[0] + "/brightness").read().strip()) > 0
+        except Exception:
+            pass
+    return web.json_response({"ok": True, "leds": [l.split("/")[-1] for l in leds], "on": on})
+
+
+async def led_set(request):
+    """POST /mb/net/led {on} — turn the board activity LED on/off (persist best-effort)."""
+    import glob
+    body = await request.json()
+    on = bool(body.get("on"))
+    leds = sorted(glob.glob("/sys/class/leds/*ACT*") + glob.glob("/sys/class/leds/led0"))
+    if not leds:
+        return web.json_response({"ok": False, "error": "no controllable LED found"}, status=404)
+    d = leds[0]
+    # detach the kernel trigger so brightness sticks, then set it
+    sh("bash", "-c", "echo none > %s/trigger 2>/dev/null" % d)
+    rc, out = sh("bash", "-c", "echo %d > %s/brightness" % (1 if on else 0, d))
+    return web.json_response({"ok": rc == 0, "on": on, "led": d.split("/")[-1]})
+
+
+async def update_apply(_):
+    """POST /mb/net/update/apply — git-based self-update of /opt/magicbridge + restart sidecars."""
+    _rw()
+    try:
+        rc, out = sh("bash", "-c",
+                     "cd /opt/magicbridge && git fetch origin main 2>&1 && "
+                     "git reset --hard origin/main 2>&1", timeout=90)
+    finally:
+        _ro()
+    for svc in ("magicbridge-net", "magicbridge-stealth", "magicbridge-agent"):
+        sh("systemctl", "restart", svc, timeout=15)
+    sh("systemctl", "reload", "kvmd-nginx", timeout=15)
+    return web.json_response({"ok": rc == 0, "detail": out[-1500:]})
+
+
 def build_app():
     app = web.Application()
     app.add_routes([
@@ -400,6 +443,9 @@ def build_app():
         web.post("/wol", wol),
         web.get("/wifi/scan", wifi_scan),
         web.get("/update", update_check),
+        web.post("/update/apply", update_apply),
+        web.get("/led", led_get),
+        web.post("/led", led_set),
         web.get("/logs", logs_tail),
         web.get("/edid", edid_get),
         web.post("/edid", edid_apply),

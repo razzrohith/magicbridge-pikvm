@@ -186,9 +186,12 @@ button.btn.danger:hover{background:rgba(229,83,75,.1)}
             <span class="chip" onclick="combo(['MetaLeft'])">Win</span>
             <span class="chip" onclick="combo(['AltLeft','Tab'])">Alt+Tab</span>
             <span class="chip" onclick="combo(['ControlLeft','AltLeft','F1'])">Ctrl+Alt+F1</span>
+            <span class="chip" onclick="combo(['MetaLeft','KeyL'])">Win+L</span>
+            <span class="chip" onclick="combo(['ControlLeft','ShiftLeft','Escape'])">Task Mgr</span>
             <span class="chip" onclick="combo(['Escape'])">Esc</span>
             <span class="chip" onclick="combo(['PrintScreen'])">PrtSc</span>
             <span class="chip" onclick="pasteClipboard()">Paste clipboard →</span>
+            <span class="chip" onclick="screenshot()">📷 Screenshot</span>
           </div>
           <div id="osk" class="osk" style="display:none"></div>
         </div>
@@ -382,10 +385,18 @@ button.btn.danger:hover{background:rgba(229,83,75,.1)}
           <p class="sub">Updates, power and configuration.</p>
           <div class="btns">
             <button class="btn ghost" onclick="checkUpdate()">Check for updates</button>
+            <button class="btn" onclick="applyUpdate()">Apply update</button>
             <button class="btn warn" onclick="power('reboot')">Reboot</button>
             <button class="btn danger" onclick="power('off')">Shut down</button>
           </div>
           <div class="kv" style="margin-top:14px"><span class="k">Update</span><span class="v" id="upd_state">—</span></div>
+          <div class="sec-title" style="margin-top:14px">Device controls</div>
+          <div class="kv"><span class="k">USB HID (keyboard/mouse)</span>
+            <span style="display:flex;gap:6px"><button class="btn ghost" style="padding:4px 10px" onclick="hidConnect(false)">Disconnect</button>
+            <button class="btn ghost" style="padding:4px 10px" onclick="hidConnect(true)">Reconnect</button></span></div>
+          <div class="kv"><span class="k">Activity LED</span>
+            <span style="display:flex;gap:6px"><button class="btn ghost" style="padding:4px 10px" onclick="ledSet(true)">On</button>
+            <button class="btn ghost" style="padding:4px 10px" onclick="ledSet(false)">Off</button></span></div>
           <div class="kv"><span class="k">OLED display</span><span class="v"><span class="tag ok">native</span></span></div>
         </div>
         <div class="card">
@@ -583,6 +594,10 @@ async function kvmSetMouseMode(){const out=$("#mouseMode").value;kvmModeBusy=tru
   finally{setTimeout(()=>{kvmModeBusy=false;},600);}}
 function kvmFullscreen(){const b=$("#streamBox");(b.requestFullscreen||b.webkitRequestFullscreen||function(){}).call(b);}
 function combo(codes){codes.forEach(c=>sendKey(c,true));setTimeout(()=>codes.slice().reverse().forEach(c=>sendKey(c,false)),80);toast("Sent "+codes.join(" + "));}
+function screenshot(){try{const el=activeVideoEl();const w=el.naturalWidth||el.videoWidth||1920,h=el.naturalHeight||el.videoHeight||1080;
+  const cv=document.createElement("canvas");cv.width=w;cv.height=h;cv.getContext("2d").drawImage(el,0,0,w,h);
+  cv.toBlob(b=>{if(!b)return toast("Screenshot failed","bad");const a=document.createElement("a");a.href=URL.createObjectURL(b);a.download="magicbridge-"+Date.now()+".png";a.click();toast("Screenshot saved","ok");},"image/png");}
+  catch(e){toast("Screenshot failed (video not ready)","bad");}}
 /* ===== Human-like typing — MagicBridge signature. Types char-by-char over the
    HID socket with randomized inter-key delays, longer pauses after punctuation,
    and the occasional "thinking" pause, so paste doesn't look machine-instant. ===== */
@@ -778,6 +793,11 @@ async function loadSystem(){const r=await jget(KVMD+"/info");const d=res(r);
   $("#h_temp").textContent=t?t+" °C":"—";
   const thr=hw.health&&hw.health.throttling;$("#h_throttle").textContent=thr?(thr.parsed_flags&&thr.parsed_flags.undervoltage&&thr.parsed_flags.undervoltage.now?"undervoltage":"ok"):"ok";
   const s=await jget(KVMD+"/streamer");$("#h_stream").textContent=(res(s).state&&res(s).state.encoder&&res(s).state.encoder.type)||"—";}
+async function applyUpdate(){if(!confirm("Pull the latest MagicBridgeV2 and restart services?"))return;
+  $("#upd_state").textContent="updating…";const r=await jpost(MB+"/net/update/apply");
+  toast(r&&r.ok?"Updated — services restarted":"Update failed",r&&r.ok?"ok":"bad");$("#upd_state").textContent=r&&r.ok?"up to date":"update failed";setTimeout(pollUpdate,1500);}
+async function hidConnect(on){const r=await jpost(KVMD+"/hid/set_connected?connected="+(on?1:0));toast(r&&r.ok!==false?("USB HID "+(on?"reconnected":"disconnected")):"HID change failed",r&&r.ok!==false?"ok":"bad");}
+async function ledSet(on){const r=await jpost(MB+"/net/led",{on});toast(r&&r.ok?("Activity LED "+(on?"on":"off")):"LED: "+((r&&r.error)||"unavailable"),r&&r.ok?"ok":"bad");}
 async function checkUpdate(){$("#upd_state").textContent="checking…";const r=await jget(MB+"/net/update");
   $("#upd_state").textContent=r&&r.ok?r.detail:"check unavailable";}
 async function power(a){if(!confirm("Really "+a+" the device?"))return;await jpost(KVMD+"/"+(a==="reboot"?"reboot":"shutdown"));toast("Sent "+a);}
