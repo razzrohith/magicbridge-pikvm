@@ -20,7 +20,8 @@ EDEV = r"E:\Startup\MagicbridgeV2"
 # session-only artifacts we never want in git (logs, pulled temp copies, one-off diagnostics)
 EXCLUDE_FILES = ["*_log.txt", "_*.html", "inspect_*.py", "fix_*.py", "check_*.py",
                  "pull_*.py", "get_*.py", "validate*.py", "rebrand_*.py", "find_*.py",
-                 "install_portal.py", "enable_*.py", "diag_*.py", "deploy_nginx.py"]
+                 "install_portal.py", "enable_*.py", "diag_*.py", "apply_*.py",
+                 "final_*.py", "recover_*.py", "finalize_*.py", "otg_*.py", "deploy_nginx.py"]
 
 
 def log(m):

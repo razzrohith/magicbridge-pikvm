@@ -280,6 +280,52 @@ async def edid_apply(request):
     return web.json_response({"ok": rc == 0, "preset": preset, "detail": out[-1500:]})
 
 
+# ---- Realistic monitor spoofing (no PiKVM presets) ----------------
+# Presents the target with a real-looking display identity via kvmd-edidconf's
+# manufacturer/name/product/serial fields — Dell/LG/Samsung/etc., never "v4mini".
+MONITORS = {
+    "dell_u2720q":  {"label": "Dell U2720Q 27\" 4K",     "mfc": "DEL", "name": "DELL U2720Q",   "product": 16528},
+    "dell_p2419h":  {"label": "Dell P2419H 24\"",         "mfc": "DEL", "name": "DELL P2419H",   "product": 16473},
+    "lg_27gl850":   {"label": "LG UltraGear 27GL850",     "mfc": "GSM", "name": "LG ULTRAGEAR",  "product": 23450},
+    "lg_24mp":      {"label": "LG 24MP60G",               "mfc": "GSM", "name": "LG 24MP60G",    "product": 22321},
+    "samsung_g7":   {"label": "Samsung Odyssey G7",       "mfc": "SAM", "name": "Odyssey G7",    "product": 3420},
+    "samsung_s24":  {"label": "Samsung S24R350",          "mfc": "SAM", "name": "S24R35x",       "product": 3654},
+    "asus_vg279":   {"label": "ASUS VG279Q 27\"",         "mfc": "AUS", "name": "ASUS VG279",    "product": 10146},
+    "hp_e24":       {"label": "HP E24 G4 24\"",           "mfc": "HWP", "name": "HP E24 G4",     "product": 13666},
+    "benq_gw2480":  {"label": "BenQ GW2480",              "mfc": "BNQ", "name": "BenQ GW2480",   "product": 30760},
+    "acer_kg241":   {"label": "Acer KG241Q",              "mfc": "ACR", "name": "Acer KG241Q",   "product": 2402},
+    "generic_1080": {"label": "Generic 1080p Display",    "mfc": "GEN", "name": "Generic Display", "product": 4097},
+}
+
+
+async def monitor_get(_):
+    rc, cur = sh("kvmd-edidconf", timeout=10)
+    return web.json_response({"ok": True,
+        "monitors": {k: {"label": v["label"], "mfc": v["mfc"], "name": v["name"]} for k, v in MONITORS.items()},
+        "current": cur[-1500:]})
+
+
+async def monitor_set(request):
+    import random
+    body = await request.json()
+    m = MONITORS.get(body.get("preset", ""))
+    if m:
+        mfc, name, product = m["mfc"], m["name"], m["product"]
+    else:
+        mfc = (body.get("mfc") or "DEL")[:3].upper()
+        name = body.get("name") or "Generic Display"
+        product = int(str(body.get("product") or "4097"), 0)
+    serial = random.randint(1000000, 99999999)
+    _rw()
+    try:
+        rc, out = sh("kvmd-edidconf", "--set-mfc-id", mfc, "--set-monitor-name", name,
+                     "--set-product-id", str(product), "--set-serial", str(serial), "--apply", timeout=45)
+    finally:
+        _ro()
+    return web.json_response({"ok": rc == 0, "applied": {"mfc": mfc, "name": name, "product": product, "serial": serial},
+                              "detail": out[-1200:]})
+
+
 # ---- VNC (kvmd-vnc) ------------------------------------------------
 async def vnc_get(_):
     _rc, active = sh("systemctl", "is-active", "kvmd-vnc")
@@ -449,6 +495,8 @@ def build_app():
         web.get("/logs", logs_tail),
         web.get("/edid", edid_get),
         web.post("/edid", edid_apply),
+        web.get("/monitor", monitor_get),
+        web.post("/monitor", monitor_set),
         web.get("/vnc", vnc_get),
         web.post("/vnc", vnc_set),
         web.get("/totp", totp_status),

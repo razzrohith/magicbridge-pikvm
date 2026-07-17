@@ -156,14 +156,35 @@ pre{margin:11px 0 0;max-height:190px;overflow:auto;background:rgba(5,7,13,.85);b
       </div>
     </div>
 
-    <!-- MONITOR / EDID -->
+    <!-- MONITOR SPOOFING -->
     <div class="card">
-      <h2><span class="dot"></span>Monitor identity (EDID)</h2>
-      <p class="sub">What monitor the target thinks is attached. Presets change the resolutions offered.</p>
-      <label class="f"><span>EDID preset</span><select id="edidPreset"></select></label>
-      <div class="btns"><button class="btn pri" onclick="edidApply()">Apply preset</button>
-        <button class="btn" onclick="loadEdid()">Refresh</button></div>
-      <pre id="edidCur">—</pre>
+      <h2><span class="dot"></span>Monitor spoofing (EDID)</h2>
+      <p class="sub">The display make/model the target reads over HDMI. Presets are real monitors — never a capture-card default.</p>
+      <label class="f"><span>Monitor preset</span><select id="monPreset" onchange="monPick()"></select></label>
+      <div class="row">
+        <label class="f"><span>Vendor (3 letters)</span><input id="monMfc" placeholder="DEL" maxlength="3"></label>
+        <label class="f"><span>Model name</span><input id="monName" placeholder="DELL U2720Q"></label>
+      </div>
+      <div class="btns"><button class="btn pri" onclick="monApply()">Apply monitor</button>
+        <button class="btn" onclick="loadMonitor()">Refresh</button></div>
+      <pre id="monCur">—</pre>
+    </div>
+
+    <!-- REMOTE ACCESS & 2FA -->
+    <div class="card">
+      <h2><span class="dot"></span>Remote access &amp; 2FA</h2>
+      <p class="sub">Optional VNC client access and two-factor login.</p>
+      <div class="kv"><span class="k">VNC server (:5900)</span><span class="v" id="vncState">—</span></div>
+      <div class="btns"><button class="btn pri" onclick="vncSet(true)">Enable VNC</button><button class="btn" onclick="vncSet(false)">Disable</button></div>
+      <div class="sec">Two-factor (TOTP)</div>
+      <div class="kv"><span class="k">Status</span><span class="v" id="totpState">—</span></div>
+      <div id="totpSetup" style="display:none;margin-top:8px">
+        <div class="kv"><span class="k">Secret</span><span class="v" id="totpSecret" style="font-size:11px;word-break:break-all">—</span></div>
+        <label class="f" style="margin-top:8px"><span>6-digit code from your app</span><input id="totpCode" placeholder="123456" inputmode="numeric"></label>
+        <div class="btns"><button class="btn pri" onclick="totpEnable()">Verify &amp; enable</button></div>
+      </div>
+      <div class="btns" style="margin-top:8px"><button class="btn" onclick="totpGenerate()">Set up 2FA</button><button class="btn dn" onclick="totpDisable()">Disable 2FA</button></div>
+      <div class="hint">VNC exposes the screen to any client on the LAN — leave off for stealth. SSH can clear 2FA if you get locked out.</div>
     </div>
 
     <!-- ANONYMITY / NETWORK -->
@@ -291,12 +312,26 @@ async function setSafe(){const on=$("#safe").value==="true";const r=await jpost(
 async function macApply(random){const r=await jpost(MB+"/net/mac",{iface:$("#macIf").value,mac:$("#macVal").value,random});
   toast(r.ok?("MAC → "+r.mac):("MAC failed: "+(r.detail||r.error||"")),r.ok?"ok":"bad");if(r.mac){$("#macCur").textContent=r.mac;$("#stMac").textContent=r.mac;}}
 
-/* ---- EDID ---- */
-async function loadEdid(){const r=await jget(MB+"/net/edid");if(!r)return;const sel=$("#edidPreset");
-  if(r.presets&&r.presets.length&&sel.options.length<=0){sel.innerHTML=r.presets.map(p=>`<option value="${p}">${p}</option>`).join("");if(r.presets.includes("v4mini"))sel.value="v4mini";}
-  $("#edidCur").textContent=r.current||"—";}
-async function edidApply(){const p=$("#edidPreset").value;if(!p)return;if(!confirm("Apply EDID preset '"+p+"'? Captured video will blink."))return;
-  toast("Applying EDID…");const r=await jpost(MB+"/net/edid",{preset:p});toast(r&&r.ok?"EDID applied":"EDID failed",r&&r.ok?"ok":"bad");setTimeout(loadEdid,1600);}
+/* ---- monitor spoofing (realistic EDID) ---- */
+let MONS={};
+async function loadMonitor(){const r=await jget(MB+"/net/monitor");if(!r)return;MONS=r.monitors||{};const sel=$("#monPreset");
+  if(Object.keys(MONS).length&&sel.options.length<=0){sel.innerHTML='<option value="">— custom —</option>'+Object.entries(MONS).map(([k,v])=>`<option value="${k}">${v.label}</option>`).join("");}
+  $("#monCur").textContent=r.current||"—";}
+function monPick(){const k=$("#monPreset").value,v=MONS[k];if(v){$("#monMfc").value=v.mfc;$("#monName").value=v.name;}}
+async function monApply(){const preset=$("#monPreset").value;if(!confirm("Spoof this monitor? The captured video will blink for a moment."))return;
+  toast("Applying monitor identity…");
+  const r=await jpost(MB+"/net/monitor",{preset,mfc:$("#monMfc").value,name:$("#monName").value});
+  toast(r&&r.ok?("Monitor → "+((r.applied&&r.applied.name)||"applied")):"Monitor spoof failed",r&&r.ok?"ok":"bad");setTimeout(loadMonitor,1800);}
+/* ---- VNC + 2FA (moved here so editing lives only on the stealth page) ---- */
+async function loadVnc(){const r=await jget(MB+"/net/vnc");$("#vncState").innerHTML=(r&&r.active)?'<span class="tag no">exposed</span>':'<span class="tag ok">off</span>';}
+async function vncSet(on){const r=await jpost(MB+"/net/vnc",{on});toast(r&&r.ok?("VNC "+(on?"enabled":"disabled")):"VNC failed",r&&r.ok?"ok":"bad");setTimeout(loadVnc,900);}
+async function loadTotp(){const r=await jget(MB+"/net/totp");$("#totpState").innerHTML=(r&&r.enabled)?'<span class="tag ok">enabled</span>':'<span class="tag no">disabled</span>';}
+async function totpGenerate(){const r=await jpost(MB+"/net/totp/generate");if(!r||!r.ok)return toast("Failed","bad");
+  $("#totpSecret").textContent=r.secret;$("#totpSetup").style.display="";$("#totpSetup").dataset.secret=r.secret;toast("Add the secret to your authenticator, then enter the code");}
+async function totpEnable(){const sec=$("#totpSetup").dataset.secret,code=$("#totpCode").value.trim();
+  const r=await jpost(MB+"/net/totp/enable",{secret:sec,code});toast(r&&r.ok?"2FA enabled":"2FA: "+((r&&r.error)||"failed"),r&&r.ok?"ok":"bad");
+  if(r&&r.ok){$("#totpSetup").style.display="none";$("#totpCode").value="";loadTotp();}}
+async function totpDisable(){if(!confirm("Disable 2FA?"))return;const r=await jpost(MB+"/net/totp/disable");toast(r&&r.ok?"2FA disabled":"failed",r&&r.ok?"ok":"bad");loadTotp();}
 
 /* ---- network / anonymity ---- */
 async function ts(a){const r=await jpost(MB+"/net/tailscale",{action:a});toast("Tailscale "+a,(r&&r.ok)?"ok":"");loadStatus();}
@@ -328,7 +363,7 @@ async function loadStatus(){const s=await jget(MB+"/stealth/status");if(s){$("#s
   const n=await jget(MB+"/net/status");if(n){const up=n.tailscale&&n.tailscale.up;$("#tsState").textContent=up?"up":"down";$("#stTs").textContent=up?"up":"down";
     if(n.mac&&n.mac.mac){$("#macCur").textContent=n.mac.mac;$("#stMac").textContent=n.mac.mac;}
     const d=n.duckdns||{};if(d.domain)$("#ddDomain").value=d.domain;}}
-loadIdentity();loadEdid();loadStatus();checkLock();
+loadIdentity();loadMonitor();loadVnc();loadTotp();loadStatus();checkLock();
 </script>
 </body>
 </html>

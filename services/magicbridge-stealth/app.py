@@ -39,26 +39,34 @@ OTG_OVERRIDE = Path("/etc/kvmd/override.d/90-magicbridge-otg.yaml")
 
 # Presets carry the V1 "verified" flag: True only where checked against a real
 # device descriptor. Unverified ones are researched but not hardware-confirmed.
+# Real keyboard+mouse combo receivers — devices that legitimately expose BOTH a
+# keyboard and a mouse interface (so the composite HID gadget looks native).
+# NOTHING here says "KVM", "composite", "PiKVM" or "MagicBridge" — those are tells.
 PRESETS = {
     "logitech_unifying": {
         "label": "Logitech Unifying Receiver", "verified": True,
         "vendor_id": 0x046D, "product_id": 0xC52B,
         "manufacturer": "Logitech", "product": "USB Receiver",
     },
-    "microsoft_keyboard": {
-        "label": "Microsoft Wired Keyboard 600", "verified": False,
-        "vendor_id": 0x045E, "product_id": 0x0750,
-        "manufacturer": "Microsoft", "product": "Wired Keyboard 600",
+    "logitech_mk270": {
+        "label": "Logitech MK270 Combo", "verified": False,
+        "vendor_id": 0x046D, "product_id": 0xC534,
+        "manufacturer": "Logitech", "product": "USB Receiver",
     },
-    "dell_keyboard": {
-        "label": "Dell USB Keyboard", "verified": False,
-        "vendor_id": 0x413C, "product_id": 0x2107,
-        "manufacturer": "Dell", "product": "Dell USB Entry Keyboard",
+    "microsoft_combo": {
+        "label": "Microsoft Wireless Desktop", "verified": False,
+        "vendor_id": 0x045E, "product_id": 0x0800,
+        "manufacturer": "Microsoft", "product": "Microsoft USB Dual Receiver",
     },
-    "generic_kvm": {
-        "label": "Generic Composite KVM (PiKVM default)", "verified": True,
-        "vendor_id": 0x1D6B, "product_id": 0x0104,
-        "manufacturer": "MagicBridge", "product": "Composite KVM Device",
+    "dell_km636": {
+        "label": "Dell KM636 Wireless Combo", "verified": False,
+        "vendor_id": 0x413C, "product_id": 0x2110,
+        "manufacturer": "Dell", "product": "Dell KM636 Receiver",
+    },
+    "hp_combo": {
+        "label": "HP Wireless Keyboard & Mouse", "verified": False,
+        "vendor_id": 0x03F0, "product_id": 0x134A,
+        "manufacturer": "HP", "product": "HP Wireless Receiver",
     },
 }
 
@@ -94,16 +102,40 @@ def write_otg_override(ident: dict) -> None:
     finally:
         _fs("ro")
 
+_GADGET = "/sys/kernel/config/usb_gadget/kvmd"
+_OTG_TEARDOWN = (
+    'G=%s; if [ -d "$G" ]; then echo "" > $G/UDC 2>/dev/null; '
+    'for c in $G/configs/*/; do for l in "$c"*; do [ -L "$l" ] && rm -f "$l"; done; '
+    'for s in "$c"strings/*/; do rmdir "$s" 2>/dev/null; done; rmdir "$c" 2>/dev/null; done; '
+    'for f in $G/functions/*/; do rmdir "$f" 2>/dev/null; done; '
+    'for s in $G/strings/*/; do rmdir "$s" 2>/dev/null; done; rmdir $G 2>/dev/null; fi; '
+    'rm -rf /run/kvmd/otg'
+) % _GADGET
+
+
 def rebuild_gadget() -> tuple[bool, str]:
-    rc, out = _sh("systemctl", "restart", "kvmd-otg")
+    # kvmd-otg can't create the gadget on top of a running/leftover one, and its
+    # own `stop` doesn't reliably remove the configfs gadget or /run/kvmd/otg — so
+    # we tear BOTH down ourselves, then start fresh. This is what makes live USB
+    # identity spoofing actually apply (a plain restart errors FileExists).
+    _sh("systemctl", "reset-failed", "kvmd-otg")
+    _sh("systemctl", "stop", "kvmd-otg", timeout=20)
+    time.sleep(1)
+    _sh("bash", "-c", _OTG_TEARDOWN)
+    _sh("systemctl", "reset-failed", "kvmd-otg")
+    rc, out = _sh("systemctl", "start", "kvmd-otg", timeout=25)
+    if rc != 0:  # never leave the gadget down — clean once more + retry
+        _sh("bash", "-c", _OTG_TEARDOWN)
+        _sh("systemctl", "reset-failed", "kvmd-otg")
+        rc, out = _sh("systemctl", "start", "kvmd-otg", timeout=25)
     if rc == 0:
         _sh("systemctl", "try-restart", "kvmd")
     return rc == 0, out
 
 def current_identity() -> dict:
     return load_config("stealth", {
-        "preset": "generic_kvm", **PRESETS["generic_kvm"],
-        "serial": "MB000001", "safe_mode": False,
+        "preset": "logitech_unifying", **PRESETS["logitech_unifying"],
+        "serial": "", "safe_mode": False,  # Logitech Unifying legitimately has no serial
     })
 
 # ---- separate stealth password (independent of the kvmd login) ------

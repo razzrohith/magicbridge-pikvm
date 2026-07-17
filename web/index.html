@@ -140,7 +140,7 @@ button.btn.danger:hover{background:rgba(229,83,75,.1)}
       <button onclick="location.href='/stealth/'"><svg viewBox="0 0 24 24"><path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6z"/></svg>Stealth &#8599;</button>
     </nav>
     <div class="foot"><span class="dot"></span><span id="fstatus">online</span> · <span id="fver">v2</span><br>
-      <span style="color:var(--text3)">on PiKVM · kvmd (GPLv3)</span></div>
+      <span style="color:var(--text3)">MagicBridgeV2 · secure link</span></div>
   </aside>
 
   <main class="main">
@@ -399,30 +399,24 @@ button.btn.danger:hover{background:rgba(229,83,75,.1)}
             <button class="btn ghost" style="padding:4px 10px" onclick="ledSet(false)">Off</button></span></div>
           <div class="kv"><span class="k">OLED display</span><span class="v"><span class="tag ok">native</span></span></div>
         </div>
-        <div class="card">
-          <h3>Display / EDID</h3>
-          <p class="sub">What the target thinks it's plugged into. Presets change the resolutions offered to it.</p>
-          <label class="f"><span>EDID preset</span><select id="edid_preset"></select></label>
-          <div class="btns"><button class="btn" onclick="edidApply()">Apply preset</button>
-            <button class="btn ghost" onclick="loadEdid()">Refresh</button></div>
-          <pre id="edid_cur" style="margin:12px 0 0;max-height:130px;overflow:auto;background:var(--surface3);border:1px solid var(--border);border-radius:8px;padding:10px;font-size:11px;color:var(--text2);white-space:pre-wrap">—</pre>
-        </div>
-        <div class="card">
-          <h3>Remote access &amp; 2FA</h3>
-          <p class="sub">Optional VNC client access and two-factor login.</p>
-          <div class="kv"><span class="k">VNC server (:5900)</span><span class="v" id="vnc_state">—</span></div>
-          <div class="btns"><button class="btn" onclick="vncSet(true)">Enable VNC</button>
-            <button class="btn ghost" onclick="vncSet(false)">Disable</button></div>
-          <div class="sec-title" style="margin-top:16px">Two-factor (TOTP)</div>
-          <div class="kv"><span class="k">Status</span><span class="v" id="totp_state">—</span></div>
-          <div id="totp_setup" style="display:none;margin-top:10px">
-            <div class="kv"><span class="k">Secret</span><span class="v" id="totp_secret" style="font-size:11px;word-break:break-all">—</span></div>
-            <label class="f" style="margin-top:8px"><span>6-digit code from your app</span><input id="totp_code" placeholder="123456" inputmode="numeric"></label>
-            <div class="btns"><button class="btn" onclick="totpEnable()">Verify &amp; enable</button></div>
-            <div class="hint">Add the secret to Google Authenticator/Authy, enter the current code, then enable. SSH can always clear 2FA if you get locked out.</div>
+        <div class="card span">
+          <h3>Identity &amp; anonymity &nbsp;<span class="tag">view only</span></h3>
+          <p class="sub">What this bridge currently presents to the target machine and the network. To change any of it, open the <a href="/stealth/">Stealth control panel &#8599;</a></p>
+          <div class="grid cols3" style="gap:2px 26px">
+            <div>
+              <div class="kv"><span class="k">Spoofed USB device</span><span class="v" id="id_usb">—</span></div>
+              <div class="kv"><span class="k">USB serial</span><span class="v" id="id_serial">—</span></div>
+            </div>
+            <div>
+              <div class="kv"><span class="k">MAC address</span><span class="v" id="id_mac">—</span></div>
+              <div class="kv"><span class="k">Spoofed monitor</span><span class="v" id="id_mon">—</span></div>
+            </div>
+            <div>
+              <div class="kv"><span class="k">Safe mode</span><span class="v" id="id_safe">—</span></div>
+              <div class="kv"><span class="k">VNC exposure</span><span class="v" id="id_vnc">—</span></div>
+              <div class="kv"><span class="k">Two-factor login</span><span class="v" id="id_2fa">—</span></div>
+            </div>
           </div>
-          <div class="btns" style="margin-top:10px"><button class="btn ghost" onclick="totpGenerate()">Set up 2FA</button>
-            <button class="btn danger" onclick="totpDisable()">Disable 2FA</button></div>
         </div>
         <div class="card">
           <h3>Advanced &amp; native tools</h3>
@@ -461,7 +455,7 @@ $$("#nav button").forEach(b=>b.onclick=()=>{
   $$("#nav button").forEach(x=>x.classList.toggle("active",x===b));
   const p=b.dataset.p;$$(".page").forEach(x=>x.classList.toggle("active",x.dataset.page===p));
   $("#ptitle").textContent=titles[p];
-  ({screen:loadStreamCtl,power:()=>{loadMsd();loadGpio();},network:loadNetwork,auto:()=>{loadAuto();renderClips();},system:()=>{loadSystem();loadEdid();loadVnc();loadTotp();}}[p]||(()=>{}))();
+  ({screen:loadStreamCtl,power:()=>{loadMsd();loadGpio();},network:loadNetwork,auto:()=>{loadAuto();renderClips();},system:()=>{loadSystem();loadIdentityView();}}[p]||(()=>{}))();
 });
 
 /* ===== KVM core — live video + keyboard/mouse over kvmd's binary WebSocket =====
@@ -787,13 +781,13 @@ function flat(o,p){let out={};for(const k in o){const v=o[k],key=p?p+"."+k:k;if(
 async function loadSystem(){const r=await jget(KVMD+"/info");const d=res(r);
   const meta=(d.meta&&d.meta.server)||{};const hw=d.hw||{};
   $("#sys_info").innerHTML=`<div class="kv"><span class="k">Hostname</span><span class="v">${(d.meta&&d.meta.server&&d.meta.server.host)||location.hostname}</span></div>
-    <div class="kv"><span class="k">Platform</span><span class="v">${(d.hw&&d.hw.platform&&d.hw.platform.base)||"PiKVM V4 Mini"}</span></div>
+    <div class="kv"><span class="k">Device</span><span class="v">MagicBridgeV2 Appliance</span></div>
     <div class="kv"><span class="k">Product</span><span class="v">MagicBridgeV2</span></div>
-    <div class="kv"><span class="k">Kernel/OS</span><span class="v">PiKVM · kvmd</span></div>`;
+    <div class="kv"><span class="k">Firmware</span><span class="v">MagicBridge OS · v2</span></div>`;
   const t=hw.health&&hw.health.temp?hw.health.temp.cpu:null;
-  $("#h_temp").textContent=t?t+" °C":"—";
+  $("#h_temp").textContent=t?(+t).toFixed(1)+" °C":"—";
   const thr=hw.health&&hw.health.throttling;$("#h_throttle").textContent=thr?(thr.parsed_flags&&thr.parsed_flags.undervoltage&&thr.parsed_flags.undervoltage.now?"undervoltage":"ok"):"ok";
-  const s=await jget(KVMD+"/streamer");$("#h_stream").textContent=(res(s).state&&res(s).state.encoder&&res(s).state.encoder.type)||"—";}
+  const st=(res(await jget(KVMD+"/streamer")).streamer)||{};$("#h_stream").textContent=(st.encoder&&st.encoder.type)||"—";}
 async function applyUpdate(){if(!confirm("Pull the latest MagicBridgeV2 and restart services?"))return;
   $("#upd_state").textContent="updating…";const r=await jpost(MB+"/net/update/apply");
   toast(r&&r.ok?"Updated — services restarted":"Update failed",r&&r.ok?"ok":"bad");$("#upd_state").textContent=r&&r.ok?"up to date":"update failed";setTimeout(pollUpdate,1500);}
@@ -804,25 +798,19 @@ async function checkUpdate(){$("#upd_state").textContent="checking…";const r=a
 async function power(a){if(!confirm("Really "+a+" the device?"))return;await jpost(KVMD+"/"+(a==="reboot"?"reboot":"shutdown"));toast("Sent "+a);}
 async function loadLogs(){$("#logbox").textContent="loading…";const r=await jget(MB+"/net/logs?n=120");
   $("#logbox").textContent=(r&&r.text)?r.text:"No logs returned (journald may be restricted).";}
-/* EDID / VNC / 2FA */
-async function loadEdid(){const r=await jget(MB+"/net/edid");if(!r)return;const sel=$("#edid_preset");
-  if(r.presets&&r.presets.length&&sel.options.length<=0){sel.innerHTML=r.presets.map(p=>`<option value="${p}">${p}</option>`).join("");
-    if(r.presets.includes("v4mini"))sel.value="v4mini";}
-  $("#edid_cur").textContent=r.current||"—";}
-async function edidApply(){const p=$("#edid_preset").value;if(!p)return;if(!confirm("Apply EDID preset '"+p+"'? The captured video will blink for a moment."))return;
-  toast("Applying EDID preset…");const r=await jpost(MB+"/net/edid",{preset:p});
-  toast(r&&r.ok?"EDID preset applied":"EDID failed",r&&r.ok?"ok":"bad");setTimeout(loadEdid,1800);}
-async function loadVnc(){const r=await jget(MB+"/net/vnc");$("#vnc_state").innerHTML=(r&&r.active)?'<span class="tag ok">running</span>':'<span class="tag">off</span>';}
-async function vncSet(on){const r=await jpost(MB+"/net/vnc",{on});toast(r&&r.ok?("VNC "+(on?"enabled":"disabled")):"VNC change failed",r&&r.ok?"ok":"bad");setTimeout(loadVnc,900);}
-async function loadTotp(){const r=await jget(MB+"/net/totp");$("#totp_state").innerHTML=(r&&r.enabled)?'<span class="tag ok">enabled</span>':'<span class="tag warn">disabled</span>';}
-async function totpGenerate(){const r=await jpost(MB+"/net/totp/generate");if(!r||!r.ok)return toast("Couldn't generate secret","bad");
-  $("#totp_secret").textContent=r.secret;$("#totp_setup").style.display="";$("#totp_setup").dataset.secret=r.secret;
-  toast("Add the secret to your authenticator app, then enter the code");}
-async function totpEnable(){const sec=$("#totp_setup").dataset.secret,code=$("#totp_code").value.trim();
-  const r=await jpost(MB+"/net/totp/enable",{secret:sec,code});
-  toast(r&&r.ok?"2FA enabled":"2FA: "+((r&&r.error)||"failed"),r&&r.ok?"ok":"bad");
-  if(r&&r.ok){$("#totp_setup").style.display="none";$("#totp_code").value="";loadTotp();}}
-async function totpDisable(){if(!confirm("Disable two-factor login?"))return;const r=await jpost(MB+"/net/totp/disable");toast(r&&r.ok?"2FA disabled":"failed",r&&r.ok?"ok":"bad");loadTotp();}
+/* Identity & anonymity — READ ONLY on the main page. All editing lives on /stealth/. */
+function toHexId(n){return n?("0x"+Number(n).toString(16).toUpperCase()):"—";}
+async function loadIdentityView(){
+  const s=await jget(MB+"/stealth/identity");if(s&&s.current){const c=s.current;
+    if($("#id_usb"))$("#id_usb").textContent=(c.label||"—")+"  ("+toHexId(c.vendor_id)+":"+toHexId(c.product_id)+")";
+    if($("#id_serial"))$("#id_serial").textContent=c.serial||"—";
+    if($("#id_safe"))$("#id_safe").innerHTML=c.safe_mode?'<span class="tag ok">on</span>':'<span class="tag">off</span>';}
+  const n=await jget(MB+"/net/status");if(n&&n.mac&&n.mac.mac&&$("#id_mac"))$("#id_mac").textContent=n.mac.mac;
+  const mon=await jget(MB+"/net/monitor");if(mon&&mon.current&&$("#id_mon")){
+    const nm=(mon.current.match(/Monitor name:\s*(.+)/i)||[])[1]||(mon.current.match(/Manufacturer ID:\s*(\w+)/i)||[])[1];
+    $("#id_mon").textContent=nm?nm.trim():"—";}
+  const v=await jget(MB+"/net/vnc");if($("#id_vnc"))$("#id_vnc").innerHTML=(v&&v.active)?'<span class="tag warn">exposed :5900</span>':'<span class="tag ok">off</span>';
+  const t=await jget(MB+"/net/totp");if($("#id_2fa"))$("#id_2fa").innerHTML=(t&&t.enabled)?'<span class="tag ok">enabled</span>':'<span class="tag">off</span>';}
 
 /* top bar */
 async function refreshTop(){const r=await jget(KVMD+"/info");const d=res(r);const hw=d.hw||{};

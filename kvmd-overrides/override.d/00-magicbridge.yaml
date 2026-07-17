@@ -16,6 +16,17 @@ kvmd:
             jiggler:
                 enabled: false
 
+# Default USB gadget identity the TARGET sees over USB — present a real Logitech
+# Unifying Receiver instead of kvmd's default "PiKVM Composite Device" tell.
+# (Applied cleanly when kvmd-otg starts fresh, e.g. on boot; the Stealth panel
+# can override it live. Note: kvmd-otg must be STOPPED then STARTED to rebuild
+# the gadget — a plain restart leaves the old gadget and errors FileExists.)
+otg:
+    vendor_id: 0x046D
+    product_id: 0xC52B
+    manufacturer: "Logitech"
+    product: "USB Receiver"
+
     # NOTE: kvmd's `info/meta` is a PATH to a YAML file (default /etc/kvmd/meta.yaml),
     # NOT an inline content block. Setting it to a dict makes kvmd try to open the
     # dict-as-path and throw FileNotFoundError on every /api/info meta read. Our UI
