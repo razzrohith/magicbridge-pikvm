@@ -49,6 +49,8 @@ a{color:var(--accent);text-decoration:none}
 .stats{display:flex;gap:8px;flex-wrap:wrap}
 .stat{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:5px 11px;font-size:12px;color:var(--text2)}
 .stat b{color:var(--text);font-weight:600;margin-left:5px}
+.updchip{color:var(--warn);border-color:rgba(217,164,65,.5);font-weight:600;animation:updpulse 1.8s ease-in-out infinite}
+@keyframes updpulse{50%{box-shadow:0 0 0 3px rgba(217,164,65,.18);border-color:var(--warn)}}
 .content{padding:24px 26px 60px;max-width:1180px}
 .page{display:none}.page.active{display:block;animation:fade .18s ease}
 @keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
@@ -145,6 +147,7 @@ button.btn.danger:hover{background:rgba(229,83,75,.1)}
     <div class="top">
       <h1 id="ptitle">Screen &amp; Control</h1>
       <div class="stats">
+        <div class="stat updchip" id="updChip" style="display:none;cursor:pointer" onclick="goPage('system')">⟳ Update available</div>
         <div class="stat">CPU<b id="s_temp">—</b></div>
         <div class="stat">Uptime<b id="s_up">—</b></div>
         <div class="stat">Stream<b id="s_stream">—</b></div>
@@ -343,13 +346,19 @@ button.btn.danger:hover{background:rgba(229,83,75,.1)}
           <div class="btns"><button class="btn" onclick="agentRun()">Run</button></div>
         </div>
         <div class="card">
-          <h3>Macros &amp; jiggler</h3>
-          <p class="sub">Saved key sequences and idle-prevention.</p>
-          <div id="macro_list" class="hint" style="margin:0 0 12px">No macros saved yet.</div>
-          <div class="switch"><span style="flex:1">Mouse jiggler</span>
-            <select id="jig" style="width:120px"><option value="false">Off</option><option value="true">On</option></select>
+          <h3>Clips &amp; jiggler</h3>
+          <p class="sub">Saved text snippets for one-click paste, plus idle-prevention.</p>
+          <div class="row">
+            <label class="f"><span>New clip</span><input id="clip_txt" placeholder="text to save…"></label>
+            <button class="btn" style="align-self:flex-end" onclick="addClip()">Save clip</button>
+          </div>
+          <div id="clip_list" style="margin:6px 0 4px"></div>
+          <div class="sec-title" style="margin-top:14px">Mouse jiggler</div>
+          <div class="switch">
+            <select id="jig" style="width:auto"><option value="false">Off</option><option value="true">On</option></select>
+            <select id="jigInt" style="width:auto"><option value="30">every 30s</option><option value="60" selected>every 60s</option><option value="120">every 2m</option></select>
             <button class="btn ghost" onclick="jiggler()">Set</button></div>
-          <div class="hint">The jiggler makes small net-zero mouse movements to keep the target awake, pausing on real input.</div>
+          <div class="hint">Clips paste with human-like typing. The jiggler makes small net-zero movements to keep the target awake, pausing on real input.</div>
         </div>
       </div>
     </section>
@@ -441,7 +450,7 @@ $$("#nav button").forEach(b=>b.onclick=()=>{
   $$("#nav button").forEach(x=>x.classList.toggle("active",x===b));
   const p=b.dataset.p;$$(".page").forEach(x=>x.classList.toggle("active",x.dataset.page===p));
   $("#ptitle").textContent=titles[p];
-  ({screen:loadStreamCtl,power:()=>{loadMsd();loadGpio();},network:loadNetwork,auto:loadAuto,system:()=>{loadSystem();loadEdid();loadVnc();loadTotp();}}[p]||(()=>{}))();
+  ({screen:loadStreamCtl,power:()=>{loadMsd();loadGpio();},network:loadNetwork,auto:()=>{loadAuto();renderClips();},system:()=>{loadSystem();loadEdid();loadVnc();loadTotp();}}[p]||(()=>{}))();
 });
 
 /* ===== KVM core — live video + keyboard/mouse over kvmd's binary WebSocket =====
@@ -551,8 +560,15 @@ const clamp127=v=>Math.max(-127,Math.min(127,v|0));
 function kvmToggleCapture(){kvmCap=!kvmCap;const box=$("#streamBox"),btn=$("#capBtn");
   btn.textContent=kvmCap?"Release":"Capture";btn.classList.toggle("ghost",kvmCap);box.classList.toggle("cap",kvmCap);
   box.style.cursor=(kvmCap&&kvmAbs)?"crosshair":"default";
-  if(kvmCap){box.focus();setLed("ledKbd","g");setLed("ledMouse","g");if(!kvmAbs)toast("Relative mouse — click the video to lock the pointer (Esc to release)");}
-  else{setLed("ledKbd","");setLed("ledMouse","");if(document.pointerLockElement)document.exitPointerLock();}}
+  if(kvmCap){box.focus();setLed("ledKbd","g");setLed("ledMouse","g");
+    // Keyboard Lock captures Escape (and shortcuts) so a quick Esc reaches the
+    // target and only a ~2s hold releases control. Needs fullscreen; best-effort.
+    try{if(navigator.keyboard&&navigator.keyboard.lock){
+      (box.requestFullscreen?box.requestFullscreen():Promise.resolve()).then(()=>navigator.keyboard.lock(["Escape"])).catch(()=>{});}}catch(e){}
+    toast(kvmAbs?"Capturing — hold Esc ~2s to release control":"Relative mouse — click the video to lock; hold Esc ~2s to release");}
+  else{setLed("ledKbd","");setLed("ledMouse","");if(document.pointerLockElement)document.exitPointerLock();
+    try{if(navigator.keyboard&&navigator.keyboard.unlock)navigator.keyboard.unlock();}catch(e){}
+    if(document.fullscreenElement)document.exitFullscreen().catch(()=>{});}}
 /* Switch the kvmd HID mouse gadget (usb=absolute, usb_rel=relative). kvmd
    defaults to absolute and ignores relative reports until the gadget is
    switched — this is why relative mode was dead before. */
@@ -647,6 +663,7 @@ function toggleOsk(){const box=$("#osk");buildOsk();const show=box.style.display
 /* --- wire input on the stream box --- */
 (function(){const box=$("#streamBox");if(!box)return;
   box.addEventListener("contextmenu",e=>e.preventDefault());
+  let escTimer=null,escExited=false;
   const locked=()=>document.pointerLockElement===box;
   const active=()=>kvmCap||locked();
   box.addEventListener("mousedown",e=>{
@@ -658,8 +675,13 @@ function toggleOsk(){const box=$("#osk");buildOsk();const show=box.style.display
     if(kvmAbs){if(!kvmCap)return;const g=imgGeo();sendMove(remap(e.clientX-g.x,0,g.width-1,-32768,32767),remap(e.clientY-g.y,0,g.height-1,-32768,32767));}
     else if(locked()){sendRel(clamp127(e.movementX),clamp127(e.movementY));}});
   box.addEventListener("wheel",e=>{if(!active())return;e.preventDefault();sendWheel(0,e.deltaY>0?-5:5);},{passive:false});
-  box.addEventListener("keydown",e=>{if(!active())return;e.preventDefault();if(!e.repeat)sendKey(e.code,true);});
-  box.addEventListener("keyup",e=>{if(!active())return;e.preventDefault();sendKey(e.code,false);});
+  box.addEventListener("keydown",e=>{if(!active())return;e.preventDefault();
+    if(e.code==="Escape"){ // quick tap → forward to target; hold ~2s → release control
+      if(!escTimer){escExited=false;escTimer=setTimeout(()=>{escTimer=null;escExited=true;kvmToggleCapture();},1500);}return;}
+    if(!e.repeat)sendKey(e.code,true);});
+  box.addEventListener("keyup",e=>{if(!active()&&e.code!=="Escape")return;e.preventDefault();
+    if(e.code==="Escape"){ if(escTimer){clearTimeout(escTimer);escTimer=null;if(!escExited){sendKey("Escape",true);sendKey("Escape",false);}} escExited=false;return;}
+    sendKey(e.code,false);});
   // Keep the mouse LED honest as pointer-lock engages/releases (Esc to release).
   document.addEventListener("pointerlockchange",()=>{const on=locked();setLed("ledMouse",on||kvmCap?"g":"");setLed("ledKbd",on||kvmCap?"g":"");});
 })();
@@ -730,7 +752,19 @@ async function loadAuto(){const c=await jget(MB+"/agent/config");if(c){$("#ai_st
 async function saveKey(){const r=await jpost(MB+"/agent/config",{provider:$("#ai_prov").value,model:$("#ai_model").value,key:$("#ai_key").value});$("#ai_key").value="";toast(r.ok?"Key saved on device":"failed",r.ok?"ok":"bad");}
 async function agentRun(){toast("Running agent…");const r=await jpost(MB+"/agent/run",{prompt:$("#ai_prompt").value});toast(r.ok?"Agent executed":"Agent: "+(r.error||"error"),r.ok?"ok":"bad");}
 async function runMacro(n){const r=await jpost(MB+"/agent/macros/run",{name:n});toast(r.ok?"Macro ran":"failed",r.ok?"ok":"bad");}
-async function jiggler(){const on=$("#jig").value==="true";await jpost(KVMD+"/hid/set_params?jiggler="+(on?1:0));toast("Jiggler "+(on?"on":"off"),"ok");}
+async function jiggler(){const on=$("#jig").value==="true";const iv=$("#jigInt")?$("#jigInt").value:60;
+  await jpost(KVMD+"/hid/set_params?jiggler="+(on?1:0)+"&jiggler_interval="+iv);toast("Jiggler "+(on?"on ("+iv+"s)":"off"),"ok");}
+/* ---- Clips: quick-paste snippets (saved in this browser) ---- */
+function getClips(){try{return JSON.parse(localStorage.getItem("mb_clips")||"[]");}catch(e){return [];}}
+function saveClips(a){try{localStorage.setItem("mb_clips",JSON.stringify(a));}catch(e){}}
+function renderClips(){const box=$("#clip_list");if(!box)return;const c=getClips();
+  if(!c.length){box.innerHTML='<div class="hint" style="margin:0">No clips yet.</div>';return;}
+  box.innerHTML=c.map((t,i)=>`<div class="kv"><span class="k" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:220px">${t.replace(/</g,"&lt;")}</span>
+    <span style="display:flex;gap:6px"><button class="btn ghost" style="padding:4px 10px" onclick="pasteClip(${i})">Paste</button>
+    <button class="btn danger" style="padding:4px 10px" onclick="delClip(${i})">×</button></span></div>`).join("");}
+function addClip(){const t=$("#clip_txt").value.trim();if(!t)return;const c=getClips();c.unshift(t);saveClips(c.slice(0,30));$("#clip_txt").value="";renderClips();}
+function delClip(i){const c=getClips();c.splice(i,1);saveClips(c);renderClips();}
+async function pasteClip(i){const c=getClips();if(c[i])await sendString(c[i]);}
 
 /* system */
 function flat(o,p){let out={};for(const k in o){const v=o[k],key=p?p+"."+k:k;if(v&&typeof v==="object"&&!Array.isArray(v))Object.assign(out,flat(v,key));else out[key]=String(v);}return out;}
@@ -787,7 +821,11 @@ async function updateStreamStats(){const st=(res(await jget(KVMD+"/streamer")).s
 function fmtUp(s){if(!s)return "—";s=+s;const d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60);
   return (d?d+"d ":"")+h+"h "+m+"m";}
 
-kvmReloadStream();kvmConnect();refreshTop();loadMsd();loadStreamCtl();loadGpio();setInterval(refreshTop,5000);
+function goPage(p){const b=[...document.querySelectorAll("#nav button")].find(x=>x.dataset.p===p);if(b)b.click();}
+async function pollUpdate(){const r=await jget(MB+"/net/update");const c=$("#updChip");if(!c)return;
+  if(r&&r.ok&&r.updates>0){c.style.display="";c.textContent="⟳ "+r.updates+" update"+(r.updates>1?"s":"")+" available";}else{c.style.display="none";}}
+kvmReloadStream();kvmConnect();refreshTop();loadMsd();loadStreamCtl();loadGpio();renderClips();pollUpdate();
+setInterval(refreshTop,5000);setInterval(pollUpdate,180000);
 </script>
 </body>
 </html>
