@@ -476,20 +476,36 @@ function kvmReloadStream(){const v=$("#video");v.onload=()=>{$("#videoPh").style
    ported from kvmd stream_janus.js. Opt-in; auto-falls back to MJPEG on failure. ===== */
 function janusWsUrl(){return (location.protocol==='https:'?'wss':'ws')+'://'+location.host+'/janus/ws';}
 function JanusStreamer(videoEl,onActive,onInfo){
-  let stop=false,janus=null,handle=null,retry=null;
+  let stop=false,janus=null,handle=null,retry=null,infoTimer=null,frames=0;
   this.start=function(){stop=false;ensure();};
   this.stop=function(){stop=true;destroy();};
   function ensure(){if(janus||stop||!window.Janus)return;
     janus=new window.Janus({server:janusWsUrl(),ipv6:false,destroyOnUnload:false,iceServers:[],
       success:attach,error:function(e){onInfo("janus: "+e);finish();}});}
-  function finish(){if(handle){try{handle.detach();}catch(e){}handle=null;}janus=null;
+  function finish(){stopInfo();if(handle){try{handle.detach();}catch(e){}handle=null;}janus=null;
     if(!stop&&retry===null){retry=setTimeout(function(){retry=null;ensure();},1500);}}
-  function destroy(){if(retry){clearTimeout(retry);retry=null;}if(janus){try{janus.destroy();}catch(e){}}
+  function destroy(){stopInfo();if(retry){clearTimeout(retry);retry=null;}if(janus){try{janus.destroy();}catch(e){}}
     const s=videoEl.srcObject;if(s){s.getTracks().forEach(t=>{try{t.stop();}catch(e){}});videoEl.srcObject=null;}handle=null;janus=null;}
+  /* Ask uStreamer for a fresh keyframe. WebRTC H.264 shows nothing until a
+     keyframe arrives, and if the stream stalls it stays frozen forever unless
+     we request one — this is why it "worked ~5s then stopped" before. */
+  function keyReq(){if(handle){try{handle.send({message:{request:"key_required"}});}catch(e){}}}
+  function stopInfo(){if(infoTimer){clearInterval(infoTimer);infoTimer=null;}}
+  function startInfo(){stopInfo();frames=0;
+    infoTimer=setInterval(function(){if(!handle)return;
+      let kbps=0;try{kbps=parseInt((""+handle.getBitrate()).replace(/[^0-9]/g,""))||0;}catch(e){}
+      let f=videoEl.webkitDecodedFrameCount;
+      if(f===undefined&&videoEl.getVideoPlaybackQuality){try{f=videoEl.getVideoPlaybackQuality().totalVideoFrames;}catch(e){}}
+      if(f===undefined)f=videoEl.mozPaintedFrames;
+      if(f!==undefined){const fps=Math.max(0,f-frames);frames=f;
+        // Receiving bytes but not decoding new frames = frozen → force a keyframe.
+        if(kbps>0&&fps===0)keyReq();}
+    },1000);}
   function attach(){janus.attach({plugin:"janus.plugin.ustreamer",opaqueId:"mb-"+window.Janus.randomString(12),
     success:function(h){handle=h;h.send({message:{request:"features"}});},
     error:function(e){onInfo("attach failed");destroy();},
     connectionState:function(st){if(st==="failed")destroy();},
+    webrtcState:function(up){if(up)setTimeout(keyReq,400);},   // kickstart a keyframe once connected
     onmessage:function(msg,jsep){
       if(msg&&msg.result&&msg.result.status==="features"){
         handle.send({message:{request:"watch",params:{orientation:0,audio:false,mic:false,camera:false}}});}
@@ -498,7 +514,7 @@ function JanusStreamer(videoEl,onActive,onInfo){
         error:function(e){onInfo("SDP error");destroy();}});}},
     onremotetrack:function(track,mid,added,meta){const reason=(meta||{}).reason;
       if(added&&reason==="created"){if(!videoEl.srcObject)videoEl.srcObject=new MediaStream();
-        videoEl.srcObject.addTrack(track);if(track.kind==="video")onActive();}
+        videoEl.srcObject.addTrack(track);if(track.kind==="video"){onActive();startInfo();setTimeout(keyReq,600);}}
       else if(!added&&reason==="ended"){if(videoEl.srcObject){try{videoEl.srcObject.removeTrack(track);}catch(e){}}}},
   });}
 }
