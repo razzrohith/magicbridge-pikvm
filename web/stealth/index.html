@@ -189,6 +189,10 @@ pre{margin:11px 0 0;max-height:190px;overflow:auto;background:rgba(5,7,13,.85);b
       <h2><span class="dot"></span>Anonymity &amp; remote access</h2>
       <p class="sub">Private tunnel, public exposure, and access lockdown.</p>
       <div class="kv"><span class="k">Tailscale</span><span class="v" id="tsState">—</span></div>
+      <div id="tsLoginBox" style="display:none;margin:10px 0;padding:10px 12px;border:1px solid var(--br2);border-radius:8px;background:var(--sf2)">
+        <div style="font-size:11.5px;color:var(--t2);margin-bottom:6px">This device hasn't been authenticated to your tailnet yet. Open this link to sign in:</div>
+        <a id="tsLoginLink" href="#" target="_blank" style="word-break:break-all;font-size:12px"></a>
+      </div>
       <div class="btns">
         <button class="btn pri" onclick="ts('up')">Bring up</button>
         <button class="btn" onclick="ts('down')">Down</button>
@@ -331,8 +335,16 @@ async function totpEnable(){const sec=$("#totpSetup").dataset.secret,code=$("#to
 async function totpDisable(){if(!confirm("Disable 2FA?"))return;const r=await jpost(MB+"/net/totp/disable");toast(r&&r.ok?"2FA disabled":"failed",r&&r.ok?"ok":"bad");loadTotp();}
 
 /* ---- network / anonymity ---- */
-async function ts(a){const r=await jpost(MB+"/net/tailscale",{action:a});toast("Tailscale "+a,(r&&r.ok)?"ok":"");loadStatus();}
-async function tsInstall(){toast("Installing Tailscale…");const r=await jpost(MB+"/net/tailscale/install");toast(r&&r.ok?(r.already?"Already installed":"Installed"):"Install failed",r&&r.ok?"ok":"bad");}
+async function ts(a){
+  if(a==="up")toast("Bringing Tailscale up…");
+  const r=await jpost(MB+"/net/tailscale",{action:a});
+  if(r&&r.login_url){$("#tsLoginBox").style.display="";$("#tsLoginLink").href=r.login_url;$("#tsLoginLink").textContent=r.login_url;
+    toast("Sign-in required — open the link below","");}
+  else{$("#tsLoginBox").style.display="none";toast("Tailscale "+a,(r&&r.ok)?"ok":"bad");}
+  loadStatus();}
+async function tsInstall(){toast("Installing Tailscale — this can take a minute…");const r=await jpost(MB+"/net/tailscale/install");
+  toast(r&&r.ok?(r.already?"Already installed":"Installed — click Bring up to connect"):("Install failed: "+((r&&r.detail)||"").slice(-200)),r&&r.ok?"ok":"bad");
+  loadStatus();}
 async function funnel(on){toast("Configuring Funnel…");const r=await jpost(MB+"/net/tailscale/funnel",{on});toast(r&&r.ok?("Funnel "+(on?"on":"off")):"Funnel: "+((r&&(r.error||r.detail))||"failed"),r&&r.ok?"ok":"bad");}
 async function lockdown(on){const r=await jpost(MB+"/net/lockdown",{on});toast("Lockdown "+(on?"on":"off"),(r&&r.ok)?"ok":"");}
 async function duckdns(){const r=await jpost(MB+"/net/duckdns",{domain:$("#ddDomain").value,token:$("#ddToken").value});toast(r.ok?"DuckDNS updated":"DuckDNS: "+(r.error||"error"),r.ok?"ok":"bad");}

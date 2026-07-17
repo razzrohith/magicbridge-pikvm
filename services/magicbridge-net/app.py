@@ -13,6 +13,7 @@ Ports V1's network features onto the PiKVM base WITHOUT touching kvmd:
 from __future__ import annotations
 import asyncio
 import os
+import re
 import subprocess
 import sys
 import time
@@ -43,6 +44,16 @@ def sh(*args, timeout=15):
     try:
         p = subprocess.run(list(args), capture_output=True, text=True, timeout=timeout)
         return p.returncode, (p.stdout + p.stderr).strip()
+    except subprocess.TimeoutExpired as e:
+        # Some commands (notably `tailscale up` when not yet authenticated) print a
+        # login URL and then hang waiting for the browser flow to complete. Recover
+        # whatever was captured before the kill instead of losing it — the caller may
+        # still need that URL. .stdout/.stderr are bytes or str depending on 'text='.
+        def _dec(x):
+            if x is None:
+                return ""
+            return x.decode(errors="replace") if isinstance(x, bytes) else x
+        return 124, (_dec(e.stdout) + _dec(e.stderr)).strip()
     except Exception as e:
         return 1, str(e)
 
@@ -142,39 +153,130 @@ async def mac_spoof(request):
 async def tailscale_ctl(request):
     body = await request.json()
     action = body.get("action", "status")
-    if action == "up":
-        rc, out = sh("tailscale", "up", "--accept-routes", timeout=30)
-    elif action == "down":
-        rc, out = sh("tailscale", "down", timeout=15)
+    login_url = None
+    if action in ("up", "down"):
+        if sh("bash", "-c", "command -v tailscale")[0] != 0:
+            return web.json_response({"ok": False, "error": "tailscale not installed — run install first"}, status=400)
+        # tailscaled needs to persist its state to /var/lib/tailscale on login/logout
+        # (key material, node state) — the rootfs is read-only outside these brief
+        # windows, so unlock for the duration of the action only.
+        _rw()
+        try:
+            if action == "up":
+                # If this node has never authenticated, `tailscale up` prints a login
+                # URL and then blocks waiting for the browser flow — use a short
+                # timeout so sh() falls into its TimeoutExpired branch and hands back
+                # the partial output (which contains the URL) instead of just failing.
+                rc, out = sh("tailscale", "up", "--accept-routes", timeout=12)
+                m = re.search(r"https://login\.tailscale\.com/\S+", out)
+                if m:
+                    login_url = m.group(0)
+                    rc = 0  # this is the expected first-run state, not a failure
+            else:
+                rc, out = sh("tailscale", "down", timeout=15)
+        finally:
+            _ro()
     else:
         rc, out = sh("tailscale", "status", timeout=10)
-    return web.json_response({"ok": rc == 0, "action": action, "detail": out[:1500]})
+    resp = {"ok": rc == 0, "action": action, "detail": out[:1500]}
+    if login_url:
+        resp["login_url"] = login_url
+    return web.json_response(resp)
+
+
+WPA_CONF = "/etc/wpa_supplicant/wpa_supplicant-wlan0.conf"
+
+
+def _wifi_write_network(ssid, pw, priority=None):
+    """Append (or replace) a network={} block for `ssid` with a PLAIN QUOTED psk.
+
+    NOT wpa_passphrase: it was the root cause of a real outage (2026-07-17) — it
+    fails silently/oddly on SSIDs containing spaces or punctuation (e.g. "Quality
+    Inn- Office"), so the credentials never actually got written. wpa_supplicant
+    accepts a plain quoted ASCII passphrase directly, no hashing step needed. See
+    the same fix in provision/mb-portal.sh (captive-portal onboarding).
+    """
+    
+    text = ""
+    try:
+        with open(WPA_CONF) as f:
+            text = f.read()
+    except FileNotFoundError:
+        text = "ctrl_interface=/run/wpa_supplicant\nupdate_config=1\ncountry=US\n"
+    # drop any existing block(s) for this SSID first, so re-adding/editing never duplicates
+    text = re.sub(r'\nnetwork=\{[^}]*ssid="%s"[^}]*\}\n' % re.escape(ssid), "\n", text)
+    if pw:
+        prio = ("\n\tpriority=%d" % priority) if priority is not None else ""
+        block = '\nnetwork={\n\tssid="%s"\n\tpsk="%s"%s\n}\n' % (ssid, pw, prio)
+    else:
+        block = '\nnetwork={\n\tssid="%s"\n\tkey_mgmt=NONE\n}\n' % ssid
+    with open(WPA_CONF, "w") as f:
+        f.write(text.rstrip() + "\n" + block)
 
 
 async def wifi_connect(request):
     """POST /mb/net/wifi {ssid, password} — add/connect a Wi-Fi network via wpa_supplicant."""
     body = await request.json()
-    ssid = body.get("ssid", "")
+    ssid = (body.get("ssid") or "").strip()
     pw = body.get("password", "")
     if not ssid:
         return web.json_response({"ok": False, "error": "ssid required"}, status=400)
-    conf = "/etc/wpa_supplicant/wpa_supplicant-wlan0.conf"
-    # generate a network block and append (rw toggle for PiKVM read-only FS)
-    sh("bash", "-c", "command -v rw >/dev/null && rw || mount -o remount,rw /")
+    if pw and len(pw) < 8:
+        return web.json_response({"ok": False, "error": "password must be at least 8 characters"}, status=400)
+    _rw()
     try:
-        rc, block = sh("wpa_passphrase", ssid, pw)
-        if rc != 0:
-            return web.json_response({"ok": False, "error": block[:300]}, status=502)
         try:
-            with open(conf, "a") as f:
-                f.write("\n" + block + "\n")
+            _wifi_write_network(ssid, pw)
         except Exception as e:
             return web.json_response({"ok": False, "error": str(e)}, status=500)
         sh("systemctl", "restart", "wpa_supplicant@wlan0")
     finally:
-        sh("bash", "-c", "command -v ro >/dev/null && ro || true")
+        _ro()
     cfg = load_config("net", {}); cfg["wifi"] = {"ssid": ssid}; save_config("net", cfg)
     return web.json_response({"ok": True, "ssid": ssid, "note": "added; may take a few seconds to associate"})
+
+
+async def wifi_saved(_):
+    """GET /mb/net/wifi/saved — list SSIDs currently saved in wpa_supplicant, plus which
+    one (if any) wlan0 is associated to right now."""
+    
+    ssids = []
+    try:
+        with open(WPA_CONF) as f:
+            text = f.read()
+        ssids = re.findall(r'ssid="([^"]*)"', text)
+    except FileNotFoundError:
+        pass
+    current = None
+    rc, out = sh("iw", "dev", "wlan0", "link", timeout=8)
+    m = re.search(r"SSID:\s*(.+)", out)
+    if m:
+        current = m.group(1).strip()
+    return web.json_response({"ok": True, "saved": ssids, "current": current})
+
+
+async def wifi_forget(request):
+    """POST /mb/net/wifi/forget {ssid} — remove a saved network block."""
+    
+    body = await request.json()
+    ssid = (body.get("ssid") or "").strip()
+    if not ssid:
+        return web.json_response({"ok": False, "error": "ssid required"}, status=400)
+    _rw()
+    try:
+        try:
+            with open(WPA_CONF) as f:
+                text = f.read()
+        except FileNotFoundError:
+            return web.json_response({"ok": False, "error": "no saved networks"}, status=404)
+        new_text = re.sub(r'\nnetwork=\{[^}]*ssid="%s"[^}]*\}\n' % re.escape(ssid), "\n", text)
+        if new_text == text:
+            return web.json_response({"ok": False, "error": "SSID not found in saved networks"}, status=404)
+        with open(WPA_CONF, "w") as f:
+            f.write(new_text)
+    finally:
+        _ro()
+    return web.json_response({"ok": True, "ssid": ssid})
 
 
 async def wol(request):
@@ -406,13 +508,28 @@ async def totp_disable(_):
 
 # ---- Tailscale install + Funnel ------------------------------------
 async def tailscale_install(_):
-    if sh("command", "-v", "tailscale")[0] == 0 or sh("bash", "-c", "command -v tailscale")[0] == 0:
+    # PiKVM's rootfs is read-only by default. pacman needs to write to /var/lib/pacman
+    # and /usr, and `systemctl enable` needs to write a unit symlink under /etc — both
+    # fail silently-ish (non-zero rc, swallowed by the button) unless we unlock first.
+    already = sh("bash", "-c", "command -v tailscale")[0] == 0
+    if already and sh("systemctl", "is-enabled", "tailscaled")[0] == 0:
         return web.json_response({"ok": True, "already": True, "detail": "tailscale already installed"})
-    rc, out = sh("bash", "-c", "pacman -Sy --noconfirm tailscale 2>&1", timeout=120)
-    if rc != 0:
-        rc, out = sh("bash", "-c", "curl -fsSL https://tailscale.com/install.sh | sh 2>&1", timeout=180)
-    sh("systemctl", "enable", "--now", "tailscaled", timeout=20)
-    ok = sh("bash", "-c", "command -v tailscale")[0] == 0
+    _rw()
+    try:
+        out = ""
+        if not already:
+            rc, out = sh("bash", "-c", "pacman -Sy --noconfirm tailscale 2>&1", timeout=120)
+            if rc != 0:
+                rc, out2 = sh("bash", "-c", "curl -fsSL https://tailscale.com/install.sh | sh 2>&1", timeout=180)
+                out += "\n" + out2
+        # PiKVM-specific fixes package, best-effort (not fatal if missing from the repos)
+        sh("bash", "-c", "pacman -Sy --noconfirm tailscale-pikvm 2>&1", timeout=60)
+        rc_en, out_en = sh("systemctl", "enable", "--now", "tailscaled", timeout=20)
+        out += "\n" + out_en
+    finally:
+        _ro()
+    ok = (sh("bash", "-c", "command -v tailscale")[0] == 0
+          and sh("systemctl", "is-active", "tailscaled")[0] == 0)
     return web.json_response({"ok": ok, "detail": out[-1800:]})
 
 
@@ -486,6 +603,8 @@ def build_app():
         web.post("/mac", mac_spoof),
         web.post("/tailscale", tailscale_ctl),
         web.post("/wifi", wifi_connect),
+        web.get("/wifi/saved", wifi_saved),
+        web.post("/wifi/forget", wifi_forget),
         web.post("/wol", wol),
         web.get("/wifi/scan", wifi_scan),
         web.get("/update", update_check),

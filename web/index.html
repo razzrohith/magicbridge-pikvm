@@ -268,15 +268,21 @@ button.btn.danger:hover{background:rgba(229,83,75,.1)}
               <datalist id="wifi_nets"></datalist></label>
             <label class="f"><span>Password</span><input id="wifi_pw" type="password" placeholder="••••••••"></label>
           </div>
-          <div class="btns"><button class="btn" onclick="wifiConnect()">Connect</button>
+          <div class="btns"><button class="btn" onclick="wifiConnect()">Connect / Save</button>
             <button class="btn ghost" onclick="wifiScan()">Scan</button>
             <button class="btn ghost" onclick="loadNetwork()">Refresh</button></div>
           <div id="wifi_scan" class="hint" style="margin-top:8px"></div>
+          <div class="sec-title" style="margin-top:16px">Saved networks</div>
+          <div id="wifi_saved_list" class="hint" style="margin:0">—</div>
         </div>
         <div class="card">
           <h3>Tailscale &amp; access</h3>
           <p class="sub">Private remote access &amp; lockdown.</p>
           <div class="kv"><span class="k">Tailscale</span><span class="v" id="ts_state">—</span></div>
+          <div id="tsLoginBox" style="display:none;margin:10px 0;padding:10px 12px;border:1px solid var(--border2);border-radius:8px;background:var(--surface3)">
+            <div style="font-size:11.5px;color:var(--text2);margin-bottom:6px">Not signed in yet. Open this link to authenticate:</div>
+            <a id="tsLoginLink" href="#" target="_blank" style="word-break:break-all;font-size:12px"></a>
+          </div>
           <div class="btns">
             <button class="btn" onclick="tailscale('up')">Bring up</button>
             <button class="btn ghost" onclick="tailscale('down')">Down</button>
@@ -714,14 +720,32 @@ async function gpioSwitch(ch,st){await jpost(KVMD+"/gpio/switch?channel="+ch+"&s
 async function gpioPulse(ch){await jpost(KVMD+"/gpio/pulse?channel="+ch);toast("Pulsed "+ch,"ok");setTimeout(loadGpio,600);}
 
 /* network */
-async function loadNetwork(){const r=await jget(MB+"/net/status");if(r){$("#ts_state").textContent=r.tailscale&&r.tailscale.up?"up":"down";$("#wifi_state").textContent="connected";const d=(r.duckdns||{});$("#dd_last").textContent=d.last||"—";}}
-async function wifiConnect(){const r=await jpost(MB+"/net/wifi",{ssid:$("#wifi_ssid").value,password:$("#wifi_pw").value});toast(r.ok?"Wi-Fi updated":"Wi-Fi: "+(r.error||r.todo||"pending"),r.ok?"ok":"");}
+async function loadNetwork(){const r=await jget(MB+"/net/status");if(r){$("#ts_state").textContent=r.tailscale&&r.tailscale.up?"up":"down";$("#wifi_state").textContent="connected";const d=(r.duckdns||{});$("#dd_last").textContent=d.last||"—";}
+  loadWifiSaved();}
+async function loadWifiSaved(){const r=await jget(MB+"/net/wifi/saved");const el=$("#wifi_saved_list");if(!el)return;
+  if(!r||!r.ok||!r.saved||!r.saved.length){el.textContent="No saved networks yet.";return;}
+  el.innerHTML=r.saved.map(s=>{const cur=(r.current&&s===r.current);
+    return `<div class="kv"><span class="k">${s}${cur?' <span class="tag ok">connected</span>':''}</span>
+      <button class="btn ghost" style="padding:4px 10px" onclick="wifiForget('${s.replace(/'/g,"\\'")}')">Forget</button></div>`;}).join("");}
+async function wifiConnect(){const ssid=$("#wifi_ssid").value.trim();if(!ssid)return toast("Enter a network name","bad");
+  const r=await jpost(MB+"/net/wifi",{ssid,password:$("#wifi_pw").value});
+  toast(r.ok?"Saved — connecting…":"Wi-Fi: "+(r.error||r.todo||"failed"),r.ok?"ok":"bad");
+  if(r.ok){$("#wifi_pw").value="";setTimeout(loadWifiSaved,1500);}}
+async function wifiForget(ssid){if(!confirm("Forget \""+ssid+"\"?"))return;
+  const r=await jpost(MB+"/net/wifi/forget",{ssid});toast(r&&r.ok?"Forgotten":"Failed: "+((r&&r.error)||""),r&&r.ok?"ok":"bad");loadWifiSaved();}
 async function wifiScan(){$("#wifi_scan").textContent="Scanning…";const r=await jget(MB+"/net/wifi/scan");
   if(!r||!r.ok||!r.networks){$("#wifi_scan").textContent="Scan unavailable";return;}
   $("#wifi_nets").innerHTML=r.networks.map(n=>`<option value="${n.ssid}">`).join("");
   $("#wifi_scan").innerHTML=r.networks.length?("Found: "+r.networks.map(n=>n.ssid+(n.secure?" 🔒":"")).join(", ")):"No networks found";}
-async function tailscale(a){const r=await jpost(MB+"/net/tailscale",{action:a});toast("Tailscale "+a,(r&&r.ok)?"ok":"");loadNetwork();}
-async function tsInstall(){toast("Installing Tailscale… (may take a minute)");const r=await jpost(MB+"/net/tailscale/install");toast(r&&r.ok?(r.already?"Already installed":"Tailscale installed"):"Install failed — see logs",r&&r.ok?"ok":"bad");}
+async function tailscale(a){
+  if(a==="up")toast("Bringing Tailscale up…");
+  const r=await jpost(MB+"/net/tailscale",{action:a});
+  if(r&&r.login_url){$("#tsLoginBox").style.display="";$("#tsLoginLink").href=r.login_url;$("#tsLoginLink").textContent=r.login_url;
+    toast("Sign-in required — open the link below","");}
+  else{$("#tsLoginBox").style.display="none";toast("Tailscale "+a,(r&&r.ok)?"ok":"bad");}
+  loadNetwork();}
+async function tsInstall(){toast("Installing Tailscale… (may take a minute)");const r=await jpost(MB+"/net/tailscale/install");
+  toast(r&&r.ok?(r.already?"Already installed":"Installed — click Bring up to connect"):("Install failed: "+((r&&r.detail)||"").slice(-200)),r&&r.ok?"ok":"bad");}
 async function tsFunnel(on){toast("Configuring Funnel…");const r=await jpost(MB+"/net/tailscale/funnel",{on});toast(r&&r.ok?("Funnel "+(on?"on":"off")):"Funnel: "+((r&&(r.error||r.detail))||"failed"),r&&r.ok?"ok":"bad");}
 async function lockdown(on){const r=await jpost(MB+"/net/lockdown",{on});toast("Lockdown "+(on?"on":"off"),(r&&r.ok)?"ok":"");}
 async function duckdns(){const r=await jpost(MB+"/net/duckdns",{domain:$("#dd_domain").value,token:$("#dd_token").value});toast(r.ok?"DuckDNS updated":"DuckDNS: "+(r.error||"error"),r.ok?"ok":"bad");loadNetwork();}
