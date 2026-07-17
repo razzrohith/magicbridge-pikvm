@@ -86,8 +86,9 @@ FORM = """<div class=logo>M</div><h1>MagicBridge Setup</h1>
 <p class=hint>The bridge will join this network and this setup hotspot will disappear. Reconnect your device to that network to reach MagicBridge.</p>"""
 
 DONE = """<div class=ok><div class=logo style="margin:0 auto 14px">M</div>
-<h1>Connecting…</h1><p class=sub>MagicBridge is joining <b>{ssid}</b>. This hotspot will now close.
-Rejoin your normal Wi-Fi and open <b>http://magicbridge.local/</b>.</p></div>"""
+<h1>Connecting…</h1><p class=sub>MagicBridge is saving <b>{ssid}</b> and restarting to join it —
+this takes about a minute. Rejoin your normal Wi-Fi and open <b>http://magicbridge.local/</b>.
+If the <b>MagicBridge-Setup</b> hotspot reappears, the password was wrong — reconnect and try again.</p></div>"""
 
 
 class H(BaseHTTPRequestHandler):
