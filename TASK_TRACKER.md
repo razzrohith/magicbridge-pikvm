@@ -8,9 +8,9 @@
 > record each fix with its commit hash. If you're an AI assistant, keeping this current is part
 > of every task — not optional.
 
-**Last updated:** 2026-07-17
-**Repo HEAD:** `d5b7480` · github.com/razzrohith/MagicBridgeV2
-**Device:** online, fully functional. Pi IP changes per location (last seen `192.168.1.37`).
+**Last updated:** 2026-07-18
+**Repo HEAD:** `75f4a92` · github.com/razzrohith/magicbridge-pikvm
+**Device:** online, fully functional @ `172.16.20.209`. Pi IP changes per location.
 **How to update this file:** see the "Maintenance protocol" at the bottom.
 
 ---
@@ -38,9 +38,11 @@
 ### Human-gated (only Raj can do these — not code work)
 - [ ] **Tailscale sign-in** — open the login link from Network → Bring up, approve the device
       on your tailnet. (Plumbing verified; the OAuth step can't be automated.)
-- [ ] **Eyeball the redesigned UI** — hard-refresh (Ctrl+Shift+R) `/login/`, `/mb/ui/`,
-      `/stealth/` and confirm the look. (Verified structurally, not visually — the browser
-      extension was offline.)
+- [ ] **Eyeball the redesigned UI + OLED** — hard-refresh (Ctrl+Shift+R) `/login/`, `/mb/ui/`,
+      `/stealth/` and glance at the front panel (should now read `MagicBridge`, not `V2`).
+- [ ] **Reboot-verify MAC persistence (B8)** — the `.link` mechanism is tested on a dummy
+      iface; a real reboot with a spoofed wlan0 MAC would confirm end-to-end. Low risk;
+      do it on the next natural reboot.
 
 ### Open engineering tasks (nice-to-have / hardening)
 - [ ] **Fold the `/usr/share/kvmd/web/` rebrands into `magic-install.sh`** — login page, native
@@ -66,6 +68,8 @@
 
 | Date | Commit | What |
 |------|--------|------|
+| 2026-07-18 | `75f4a92` | **Bug-audit sweep — 6 verified bugs fixed & tested on-device:** MAC spoof now persists across reboot (systemd-networkd `.link`, + validation + `clear`); DuckDNS no longer marks enabled on `KO`; net `_ro()` real remount fallback; wifi/scan uses `await asyncio.sleep` (was blocking the event loop); stealth safe-mode returns an honest note; **AI-agent `key` steps now fire for real** via kvmd `send_key`/`send_shortcut` (+ key normalizer). Agent stays flag-disabled. |
+| 2026-07-18 | `98bf77a` | Rebrand `MagicBridgeV2`→`MagicBridge` deployed to Pi 209 (`align_pi.py`); OLED override re-stamped to `MagicBridge` + `kvmd-oled` restarted |
 | 2026-07-17 | `d5b7480` | Docs: all 6 polish phases done; final smoke test passed |
 | 2026-07-17 | `842c42e` | **Phase 6:** fixed VNC toggle (os.symlink boot-persist + start/stop; `enable` EROFS), verified 2FA end-to-end |
 | 2026-07-17 | `c6f7656` | **Phase 5:** System telemetry — WiFi latency/signal, connected clients, Tailscale peers, video detail |
@@ -100,6 +104,10 @@ is github.com/razzrohith/MagicBridge, reconciled through `963613f` on 2026-07-09
 | B5 | ✅ `95b71cc` | CAFEBABE serials on USB + monitor |
 | B6 | ✅ `7ae5597` | Login page looked like stock PiKVM |
 | B7 | ✅ `7ae5597` | Stealth link visible in main nav |
+| B8 | ✅ `75f4a92` | MAC spoof didn't persist across reboot (no boot re-apply; response falsely claimed it did) — now a systemd-networkd `.link` file |
+| B9 | ✅ `75f4a92` | DuckDNS marked itself `enabled` even when the update returned `KO` |
+| B10 | ✅ `75f4a92` | AI-agent `key` steps were a no-op TODO — now fire via kvmd `send_key`/`send_shortcut` |
+| B11 | ✅ `75f4a92` | net `_ro()` used `|| true` (could leave rootfs writable); wifi/scan blocked the event loop with `time.sleep`; stealth safe-mode returned a false "validated on hardware" note |
 | — | 🟡 OPEN | nginx RAM-log EACCES (V1-era, low priority, verify on V2) |
 
 ---
