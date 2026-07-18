@@ -94,6 +94,15 @@ class KvmdClient:
         return await self._req("POST", f"/hid/print{params}", data=text.encode("utf-8"))
     async def hid_set_keyboard(self, enabled: bool) -> dict:
         return await self._req("POST", f"/hid/set_params?keyboard_output={'usb' if enabled else ''}")
+    async def hid_key(self, key: str) -> dict:
+        # single key press+release (key = web KeyboardEvent.code, e.g. "Enter", "KeyA")
+        import urllib.parse
+        return await self._req("POST", f"/hid/events/send_key?key={urllib.parse.quote(key)}")
+    async def hid_shortcut(self, keys: list[str]) -> dict:
+        # chord: press all in order, release in reverse (e.g. ["ControlLeft","KeyC"])
+        import urllib.parse
+        q = urllib.parse.quote(",".join(keys))
+        return await self._req("POST", f"/hid/events/send_shortcut?keys={q}")
 
     # ---- GPIO (LEDs, custom relays, WOL trigger channels) ------------
     async def gpio_state(self) -> dict:      return await self._req("GET", "/gpio")

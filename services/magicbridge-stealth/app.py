@@ -313,7 +313,7 @@ async def safe_mode(request: web.Request):
     # override; verify against kvmd's function set on-device.
     save_config("stealth", cur)
     return web.json_response({"ok": True, "safe_mode": cur["safe_mode"],
-                              "note": "gadget-function trimming validated on hardware"})
+                              "note": "preference saved; live interface trimming not yet implemented"})
 
 async def status(_):
     rc, out = _sh("systemctl", "is-active", "kvmd-otg")

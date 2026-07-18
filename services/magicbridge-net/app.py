@@ -38,6 +38,8 @@ from aiohttp import web
 
 log = get_logger("mb-net")
 PORT = int(os.environ.get("MB_NET_PORT", "8410"))
+MAC_RE = r"^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$"
+NETWORKD_DIR = "/etc/systemd/network"
 
 
 def sh(*args, timeout=15):
@@ -206,10 +208,13 @@ async def duckdns_update(request):
             None, lambda: urllib.request.urlopen(url, timeout=15).read().decode())
     except Exception as e:
         return web.json_response({"ok": False, "error": str(e)}, status=502)
+    ok = resp.strip() == "OK"
     cfg = load_config("net", {})
-    cfg["duckdns"] = {"enabled": True, "domain": domain, "last": resp, "ts": int(time.time())}
+    # Only mark DuckDNS "enabled" if the update actually succeeded — a bad
+    # domain/token returns "KO", which must not look like a live config (bug D).
+    cfg["duckdns"] = {"enabled": ok, "domain": domain, "last": resp, "ts": int(time.time())}
     save_config("net", cfg)
-    return web.json_response({"ok": resp.strip() == "OK", "duckdns_response": resp})
+    return web.json_response({"ok": ok, "duckdns_response": resp})
 
 
 async def lockdown(request):
@@ -233,25 +238,69 @@ async def lockdown(request):
     return web.json_response({"ok": True, "lockdown": on, "note": "SSH (22) never restricted"})
 
 
+def _mac_link_path(iface):
+    return "%s/70-mb-%s.link" % (NETWORKD_DIR, iface)
+
+
+def _write_mac_link(iface, mac):
+    """Persist a spoofed MAC as a systemd-networkd .link file. udev applies it at
+    boot BEFORE the interface associates, so the spoof actually survives a reboot
+    (the old code only ran `ip link set … address` at runtime and saved a config
+    that nothing ever re-read — so the real hardware MAC came back on every boot).
+    Needs the rootfs unlocked for the /etc write."""
+    _rw()
+    try:
+        os.makedirs(NETWORKD_DIR, exist_ok=True)
+        with open(_mac_link_path(iface), "w") as f:
+            f.write("[Match]\nOriginalName=%s\n\n[Link]\nMACAddressPolicy=none\nMACAddress=%s\n"
+                    % (iface, mac))
+    finally:
+        _ro()
+
+
+def _remove_mac_link(iface):
+    _rw()
+    try:
+        os.remove(_mac_link_path(iface))
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        log.warning("remove mac link: %s", e)
+    finally:
+        _ro()
+
+
 async def mac_spoof(request):
+    import random
     body = await request.json()
     iface = body.get("iface", "wlan0")
+    if body.get("clear"):
+        # drop persistence and restore the permanent hardware MAC
+        _remove_mac_link(iface)
+        _rc, perm = sh("bash", "-c", "ethtool -P %s 2>/dev/null | awk '{print $NF}'" % iface)
+        perm = (perm or "").strip()
+        cfg = load_config("net", {}); cfg.pop("mac", None); save_config("net", cfg)
+        if re.match(MAC_RE, perm):
+            sh("ip", "link", "set", iface, "down")
+            sh("ip", "link", "set", iface, "address", perm)
+            sh("ip", "link", "set", iface, "up")
+        return web.json_response({"ok": True, "iface": iface, "cleared": True, "restored_mac": perm or None})
     if body.get("random"):
-        import random
         mac = "02:%02x:%02x:%02x:%02x:%02x" % tuple(random.randint(0, 255) for _ in range(5))
     else:
-        mac = body.get("mac", "")
-    if not mac:
-        return web.json_response({"ok": False, "error": "mac or random required"}, status=400)
+        mac = (body.get("mac") or "").strip().lower()
+    if not re.match(MAC_RE, mac):
+        return web.json_response({"ok": False, "error": "valid mac (aa:bb:cc:dd:ee:ff) or random required"}, status=400)
     sh("ip", "link", "set", iface, "down")
     rc, out = sh("ip", "link", "set", iface, "address", mac)
     sh("ip", "link", "set", iface, "up")
+    _write_mac_link(iface, mac)          # persist across reboot (bug A)
     cfg = load_config("net", {})
     cfg["mac"] = {"iface": iface, "mac": mac}
     save_config("net", cfg)
     return web.json_response({
         "ok": rc == 0, "iface": iface, "mac": mac, "detail": out[:300],
-        "persisted": "re-applied at boot via magicbridge-net config",
+        "persisted": "systemd-networkd .link file — re-applied at boot",
     })
 
 
@@ -409,7 +458,7 @@ async def wifi_scan(_):
     """GET /mb/net/wifi/scan — list nearby SSIDs (wpa_cli on PiKVM, nmcli fallback)."""
     nets = []
     rc, _o = sh("wpa_cli", "-i", "wlan0", "scan", timeout=6)
-    time.sleep(2)
+    await asyncio.sleep(2)   # was time.sleep(2) — that blocked the whole event loop (bug G)
     rc, out = sh("wpa_cli", "-i", "wlan0", "scan_results", timeout=8)
     if rc == 0 and out:
         for line in out.splitlines()[1:]:
@@ -461,7 +510,10 @@ def _rw():
 
 
 def _ro():
-    sh("bash", "-c", "command -v ro >/dev/null && ro || true")
+    # Always relock: fall back to a direct remount if the `ro` helper is absent,
+    # symmetric with _rw() and mbcommon._fs (bug F — the old `|| true` could leave
+    # the rootfs writable on any build without the helper).
+    sh("bash", "-c", "command -v ro >/dev/null && ro || mount -o remount,ro /")
 
 
 # ---- EDID editor (kvmd-edidconf) -----------------------------------

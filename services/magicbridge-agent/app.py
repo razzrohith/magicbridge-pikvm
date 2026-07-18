@@ -86,6 +86,34 @@ def _ask_llm(provider: str, key: str, model: str, prompt: str) -> dict:
     start, end = txt.find("{"), txt.rfind("}")
     return json.loads(txt[start:end + 1]) if start >= 0 else {"steps": []}
 
+# Friendly key aliases → kvmd web key names (KeyboardEvent.code). kvmd's
+# /hid/events/send_key + send_shortcut take these codes, so the agent's "key"
+# steps now actually fire on the target (press Enter, Tab, combos like ctrl+c)
+# instead of the old no-op TODO.
+_KEYALIAS = {
+    "enter": "Enter", "return": "Enter", "tab": "Tab", "esc": "Escape", "escape": "Escape",
+    "space": "Space", "spacebar": "Space", "backspace": "Backspace", "delete": "Delete", "del": "Delete",
+    "up": "ArrowUp", "down": "ArrowDown", "left": "ArrowLeft", "right": "ArrowRight",
+    "home": "Home", "end": "End", "pageup": "PageUp", "pagedown": "PageDown", "insert": "Insert",
+    "ctrl": "ControlLeft", "control": "ControlLeft", "shift": "ShiftLeft", "alt": "AltLeft",
+    "win": "MetaLeft", "meta": "MetaLeft", "cmd": "MetaLeft", "super": "MetaLeft", "gui": "MetaLeft",
+    "caps": "CapsLock", "capslock": "CapsLock", "printscreen": "PrintScreen",
+    "minus": "Minus", "equal": "Equal", "comma": "Comma", "period": "Period", "slash": "Slash",
+}
+
+def _norm_key(s: str) -> str:
+    s = str(s or "").strip()
+    low = s.lower()
+    if low in _KEYALIAS:
+        return _KEYALIAS[low]
+    if len(s) == 1 and s.isalpha():
+        return "Key" + s.upper()
+    if len(s) == 1 and s.isdigit():
+        return "Digit" + s
+    if len(low) >= 2 and low[0] == "f" and low[1:].isdigit():
+        return "F" + low[1:]
+    return s  # assume already a kvmd web key name (Enter, KeyA, ControlLeft, …)
+
 async def _execute(plan: dict) -> list:
     results = []
     k = kvmd()
@@ -95,9 +123,16 @@ async def _execute(plan: dict) -> list:
             r = await k.hid_print(step.get("value", ""))
             results.append({"text": step.get("value", "")[:40], "ok": r.get("ok")})
         elif t == "key" and k:
-            # kvmd has no single-combo REST for arbitrary chords in all builds;
-            # route simple keys through hid_print where possible, else note TODO.
-            results.append({"key": step.get("value"), "todo": "map to kvmd key event on-device"})
+            val = str(step.get("value", "")).strip()
+            # "ctrl+c" / "alt+F4" → chord via send_shortcut; single key → send_key
+            parts = [p for p in val.replace(" ", "").split("+") if p]
+            if len(parts) > 1:
+                r = await k.hid_shortcut([_norm_key(p) for p in parts])
+            elif parts:
+                r = await k.hid_key(_norm_key(parts[0]))
+            else:
+                r = {"ok": False}
+            results.append({"key": val, "ok": r.get("ok")})
         elif t == "delay":
             await asyncio.sleep(min(step.get("ms", 0) / 1000.0, 10))
             results.append({"delay_ms": step.get("ms")})
