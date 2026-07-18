@@ -6,7 +6,7 @@ WHAT IT DOES
   1. Copies the Cowork build tree
         C:\Users\razzr\Claude\Projects\MagicBridge\MagicBridgeV2
      into your canonical dev clone
-        E:\Startup\MagicbridgeV2
+        E:\Startup\magicbridge-pikvm
      (skips .git, __pycache__, venvs, logs).
   2. git init / set 'origin' to  github.com/razzrohith/MagicBridgeV2  (if needed).
   3. git add -A, commit (message = arg or timestamp), push to 'main'.
@@ -21,7 +21,7 @@ HOW TO RUN  (no admin needed)
 
 OUTPUT
   This script writes its OWN log to
-      E:\Startup\MagicbridgeV2\push_log.txt
+      E:\Startup\magicbridge-pikvm\push_log.txt
   (never shell-redirect it — that conflicts with the internal writer). Open that
   file to see what happened.
 
@@ -33,7 +33,7 @@ AUTH
 import os, sys, shutil, subprocess, datetime, io
 
 SRC   = r"C:\Users\razzr\Claude\Projects\MagicBridge\MagicBridgeV2"
-DEST  = r"E:\Startup\MagicbridgeV2"
+DEST  = r"E:\Startup\magicbridge-pikvm"
 REPO  = "https://github.com/razzrohith/MagicBridgeV2.git"
 BRANCH = "main"
 LOG   = os.path.join(DEST, "push_log.txt")

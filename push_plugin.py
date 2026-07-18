@@ -9,7 +9,7 @@ def log(m): open(LOG, "a", encoding="utf-8").write(str(m) + "\n"); print(m)
 open(LOG, "w").close()
 
 SRC = r"C:\Users\razzr\AppData\Roaming\Claude\local-agent-mode-sessions\b8da399f-3c46-44aa-aa18-60b321602b8d\603ce8fb-5e73-4a23-b2e3-f8f16445e987\local_b2e9fed4-8953-4182-a43f-c44d95a8ce78\outputs\magicbridge-marketplace"
-EDEV = r"E:\Startup\MagicbridgeV2"
+EDEV = r"E:\Startup\magicbridge-pikvm"
 DST = os.path.join(EDEV, "agent-plugin")
 
 def run(args, cwd=None):

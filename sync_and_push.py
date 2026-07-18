@@ -3,7 +3,7 @@ r"""
 sync_and_push.py  --  keep git + local in sync for MagicBridgeV2.
 
 Mirrors the mounted build folder (Projects\...\MagicBridgeV2, where edits are
-made) into the git dev repo (E:\Startup\MagicbridgeV2), then commits and pushes
+made) into the git dev repo (E:\Startup\magicbridge-pikvm), then commits and pushes
 to GitHub. Run this after every change so git and local never drift.
 
   cmd /c python C:\Users\razzr\Claude\Projects\MagicBridge\MagicBridgeV2\sync_and_push.py "commit message"
@@ -16,7 +16,7 @@ import os, subprocess, sys, time
 BASE = os.path.dirname(os.path.abspath(__file__))
 LOG = os.path.join(BASE, "sync_and_push_log.txt")
 PROJ = r"C:\Users\razzr\Claude\Projects\MagicBridge\MagicBridgeV2"
-EDEV = r"E:\Startup\MagicbridgeV2"
+EDEV = r"E:\Startup\magicbridge-pikvm"
 # session-only artifacts we never want in git (logs, pulled temp copies, one-off diagnostics)
 EXCLUDE_FILES = ["*_log.txt", "_*.html", "inspect_*.py", "fix_*.py", "check_*.py",
                  "pull_*.py", "get_*.py", "validate*.py", "rebrand_*.py", "find_*.py",
