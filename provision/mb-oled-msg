@@ -17,6 +17,22 @@ if [ "$1" = "--resume" ]; then
     exit 0
 fi
 
+# Animated "Updating..." shown during a self-update (handoff #19). Runs in the
+# FOREGROUND until killed; the caller backgrounds it, does the update, then
+# `kill` it and calls --resume. kvmd-oled --text redraws in ~2s, so the "spinner"
+# is a cycling dot count rather than a smooth bar (a smooth one needs a custom
+# luma.oled daemon; deferred).
+if [ "$1" = "--updating" ]; then
+    systemctl stop kvmd-oled 2>/dev/null
+    trap 'exit 0' TERM INT
+    i=0
+    while true; do
+        dots=$(printf '%*s' $(((i % 3) + 1)) '' | tr ' ' '.')
+        kvmd-oled --text "Updating$dots"$'\n'"keep power on" --font-size 13 >/dev/null 2>&1
+        i=$((i + 1))
+    done
+fi
+
 # Take over the display: stop the rotating status daemon first.
 systemctl stop kvmd-oled 2>/dev/null
 sleep 0.2

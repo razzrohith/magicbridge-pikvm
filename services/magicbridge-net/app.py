@@ -782,16 +782,31 @@ async def led_set(request):
 
 async def update_apply(_):
     """POST /mb/net/update/apply — git-based self-update of /opt/magicbridge + restart sidecars."""
+    oled = None
+    try:
+        oled = subprocess.Popen(["/usr/local/bin/mb-oled-msg", "--updating"])  # OLED "Updating..." (handoff #19)
+    except Exception:
+        oled = None
     _rw()
     try:
         rc, out = sh("bash", "-c",
+                     "git config --global --add safe.directory /opt/magicbridge; "
                      "cd /opt/magicbridge && git fetch origin main 2>&1 && "
                      "git reset --hard origin/main 2>&1", timeout=90)
     finally:
         _ro()
-    for svc in ("magicbridge-net", "magicbridge-stealth", "magicbridge-agent"):
-        sh("systemctl", "restart", svc, timeout=15)
     sh("systemctl", "reload", "kvmd-nginx", timeout=15)
+    # Stop the OLED animation + hand the display back BEFORE we restart ourselves
+    # (restarting magicbridge-net kills this handler, so do it here).
+    if oled:
+        try:
+            oled.terminate()
+        except Exception:
+            pass
+    sh("bash", "-c", "/usr/local/bin/mb-oled-msg --resume")
+    # Restart sidecars last; magicbridge-net restart ends this request.
+    for svc in ("magicbridge-stealth", "magicbridge-agent", "magicbridge-net"):
+        sh("systemctl", "restart", svc, timeout=15)
     return web.json_response({"ok": rc == 0, "detail": out[-1500:]})
 
 
