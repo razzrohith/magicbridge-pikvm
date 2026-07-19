@@ -39,6 +39,7 @@ online(){ ip route 2>/dev/null | grep -q '^default' || return 1
 setup_ap(){
     systemctl stop "wpa_supplicant@${AP_IFACE}" 2>/dev/null
     systemctl stop wpa_supplicant 2>/dev/null
+    rfkill unblock wifi 2>/dev/null   # a soft-blocked radio otherwise = a dead hotspot (DIY handoff #6)
     ip link set "$AP_IFACE" up
     ip addr flush dev "$AP_IFACE" 2>/dev/null
     ip addr add "${AP_IP}/24" dev "$AP_IFACE"
