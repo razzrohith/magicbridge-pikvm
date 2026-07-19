@@ -94,7 +94,7 @@
 | 2026-07-14 | `6fe9188` | Installer backport (pip/nginx/phase6 fixes) + avahi/mDNS |
 | 2026-07-11 | `985218f` | Scaffold MagicBridgeV2 |
 
-*(V1 history — the Pi 4 project — is summarized in `brain/01_OVERVIEW_AND_LINEAGE.md`; V1 repo
+*(V1 history — the Pi 4 project — is summarized in `docs/MAGICBRIDGE_SYSTEM.md` §5; V1 repo
 is github.com/razzrohith/MagicBridge, reconciled through `963613f` on 2026-07-09.)*
 
 ---
@@ -136,5 +136,5 @@ is github.com/razzrohith/MagicBridge, reconciled through `963613f` on 2026-07-09
    ID to ✅ if applicable.
 3. When you DISCOVER a bug, add it to the Bug ledger as OPEN immediately.
 4. Update **Repo HEAD** and **Last updated** at the top after each push.
-5. Anything genuinely novel/non-obvious you learned → also add it to `brain/05_DEBUG_JOURNAL.md`
-   or `brain/07_GOTCHAS_CHEATSHEET.md` so the next fresh chat inherits it.
+5. Anything genuinely novel/non-obvious you learned → also add it to
+   `docs/MAGICBRIDGE_SYSTEM.md` so the next fresh chat inherits it.

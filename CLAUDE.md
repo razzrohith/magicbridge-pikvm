@@ -6,13 +6,11 @@ layer). Read `docs/MAGICBRIDGE_SYSTEM.md` first — it is the authoritative shar
 brain (purpose, anonymity model, two-project architecture, history, roadmap, and
 how this repo relates to `magicbridge-diy`).
 
-This repo already has a rich doc set — use it:
-- `START_HERE.md` — orientation
-- `brain/01..07` — overview, hardware/access, architecture, features, **debug
-  journal**, deploy runbook, gotchas cheatsheet
-- `PROJECT_TRACKER.md`, `TASK_TRACKER.md` — status + backlog
-- `docs/FEATURES.md`, `docs/PORTING.md` — feature map + kvmd port notes
-- `docs/MAGICBRIDGE_SYSTEM.md` — the shared system brain (see it first)
+Docs (the set was trimmed to these essentials):
+- `docs/MAGICBRIDGE_SYSTEM.md` — the authoritative shared brain (read first)
+- `docs/IMAGING.md` — building a flashable `.img` + the first-boot flow
+- `TASK_TRACKER.md` — living status + backlog
+- `README.md` — orientation
 
 ## What this project is
 Free/private alternative to TinyPilot, built on kvmd so we inherit its mature
@@ -51,7 +49,18 @@ hard-to-undo change to the live Pi) → **stop, state what/why/impact, wait for 
 explicit yes.** Never weaken the anonymity model. State exactly what a deploy
 pushes; routine redeploys are SAFE, boot/network/kvmd-core changes are RISKY.
 
+## Two mechanisms only
+The product presents exactly two web faces (login gates both):
+- **Regular site** — the cockpit at `/mb/ui/` (a port of the MagicBridge DIY UI
+  onto kvmd: DIY's JSON `/ws` bridged to kvmd's binary `/api/ws`, MJPEG via kvmd
+  streamer, WebRTC via kvmd's own `janus.js`, and a fetch shim mapping DIY's
+  `/api/*` to kvmd + our `/mb/*` sidecars).
+- **Stealth mode** — the hidden panel at `/stealth/` (identity/MAC/EDID editing).
+
+Native kvmd pages (`/kvm/`, terminal, `/vnc/`) are redirected to `/mb/ui/` so
+nothing else is reachable.
+
 ## Right now
-Rebrand `MagicBridgeV2`→`MagicBridge` committed; **deploy to Pi 209 pending the
-device being online** (run `align_pi.py`). Port the DIY EDID-portability *idea*
-where relevant. Janus/WebRTC verify is the standing latency task.
+DIY UI is live at `/mb/ui/`. Remaining polish: the System sub-tabs
+(Security/Power/Devices), hide non-applicable DIY features (WoL/OLED), and give
+the stealth page the DIY look. HDMI/USB not connected → video/input untested E2E.

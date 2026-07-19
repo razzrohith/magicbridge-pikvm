@@ -1,0 +1,10 @@
+Pi HEAD before: cd5e341 chore: force LF on scripts via .gitattributes (bash/python break on CRLF on the Pi)
+fetch+reset:
+From https://github.com/razzrohith/MagicBridgeV2
+ * branch            main       -> FETCH_HEAD
+   cd5e341..e844246  main       -> origin/main
+HEAD is now at e844246 ui(cockpit): replace cockpit with the DIY UI ported to kvmd
+Pi HEAD after: e844246 ui(cockpit): replace cockpit with the DIY UI ported to kvmd
+Pi tree status: ?? web/index_new.html
+services: active active active
+=== done ===

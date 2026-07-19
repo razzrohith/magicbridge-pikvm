@@ -216,8 +216,8 @@ hardware H.264). What happened, in order:
   resolution-agnostic; added `mb-hdmi-watch` hot-plug watchdog. Verified across
   cold boots.
 
-See each repo's `docs/` (DIY) and `brain/05_DEBUG_JOURNAL.md` (PiKVM) for the
-blow-by-blow. Full auto-memory history lives in the Cowork memory store.
+See each repo's `docs/` for the blow-by-blow. Full auto-memory history lives in
+the Cowork memory store.
 
 ---
 
@@ -326,8 +326,8 @@ This project was built across a long Cowork chat with a rich private memory
 (every gotcha, the systemd trap, the audio dead-end, the naming history). **That
 chat and its memory are NOT available to these Claude Code sessions.** Everything
 load-bearing has been distilled into: this file, each repo's `CLAUDE.md`, DIY's
-`docs/DIY_PROGRESS.md` + `docs/DIY_ROADMAP.md`, and PiKVM's existing `brain/01–07`
-+ trackers. **Treat these as the source of truth**, and whenever you learn
+`docs/DIY_PROGRESS.md` + `docs/DIY_ROADMAP.md`, and PiKVM's `TASK_TRACKER.md` +
+`docs/IMAGING.md`. **Treat these as the source of truth**, and whenever you learn
 something new or non-obvious, write it back here (and port to the sibling repo) so
 it survives the next session.
 

@@ -71,7 +71,7 @@ See `docs/ARCHITECTURE.md` for detail.
 
 ## Status
 
-🚧 **In active development (hardware pending).** The V4 Mini arrives soon; until then the code is written against the documented kvmd APIs and PiKVM OS layout, to be validated on-device. Track progress in `docs/PORTING.md`.
+**Running on hardware.** MagicBridge is installed and live on a PiKVM V4 Mini: the cockpit (a port of the MagicBridge DIY UI onto kvmd) at `/mb/ui/` and the hidden stealth panel at `/stealth/`. Track progress in `TASK_TRACKER.md`.
 
 ## License & attribution
 
