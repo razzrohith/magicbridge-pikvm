@@ -832,21 +832,25 @@ body:not(.fs) .fs-hud{display:none!important}
       <!-- System tab -->
       <div class="tab" id="panel-system">
         <div class="sys-nav">
-          <button class="sys-nav-item active" data-cat="monitoring" onclick="sysNavShow('monitoring')" title="Monitoring">
+          <button class="sys-nav-item active" data-cat="monitoring" onclick="sysNavShow('monitoring')" title="Status &amp; health">
             <span class="ico">📊</span>
             <span class="sys-nav-label">Monitor<span class="sys-dot ok" id="sys-dot-monitoring"></span></span>
           </button>
-          <button class="sys-nav-item" data-cat="security" onclick="sysNavShow('security')" title="Security &amp; Account">
+          <button class="sys-nav-item" data-cat="peripherals" onclick="sysNavShow('peripherals')" title="Devices &amp; identity">
+            <span class="ico">🖱</span>
+            <span class="sys-nav-label">Devices</span>
+          </button>
+          <button class="sys-nav-item" data-cat="security" onclick="sysNavShow('security')" title="Security &amp; account">
             <span class="ico">🛡</span>
             <span class="sys-nav-label">Security<span class="sys-dot warn" id="sys-dot-security"></span></span>
           </button>
-          <button class="sys-nav-item" data-cat="power" onclick="sysNavShow('power')" title="Power &amp; Maintenance">
+          <button class="sys-nav-item" data-cat="power" onclick="sysNavShow('power')" title="Reboot &amp; shutdown">
             <span class="ico">⚡</span>
             <span class="sys-nav-label">Power<span class="sys-dot ok" id="sys-dot-power"></span></span>
           </button>
-          <button class="sys-nav-item" data-cat="peripherals" onclick="sysNavShow('peripherals')" title="Peripherals &amp; Identity">
-            <span class="ico">🖱</span>
-            <span class="sys-nav-label">Devices</span>
+          <button class="sys-nav-item" data-cat="update" onclick="sysNavShow('update')" title="Software update">
+            <span class="ico">⬆</span>
+            <span class="sys-nav-label">Update<span class="sys-dot ok" id="sys-dot-update"></span></span>
           </button>
         </div>
         <div class="sys-content">
@@ -910,17 +914,22 @@ body:not(.fs) .fs-hud{display:none!important}
         <div class="sys-cat" data-cat="power">
         <div class="scard">
           <div class="scard-title"><span class="dot-yel" style="background:var(--red)"></span>Pi Power</div>
+          <div class="snote" style="margin-bottom:8px">Reboot or shut down the Pi. Shutdown needs a manual power cycle to start again.</div>
           <button class="sbtn warn" onclick="piPower('reboot')">↺ Reboot Pi</button>
           <button class="sbtn dan" onclick="piPower('shutdown')" style="margin-top:4px">⏻ Shutdown Pi</button>
         </div>
+        </div>
+
+        <div class="sys-cat" data-cat="update">
         <div class="scard">
-          <div class="scard-title"><span class="dot-yel" style="background:var(--accent)"></span>MagicBridge Update</div>
+          <div class="scard-title"><span class="dot-yel" style="background:var(--accent)"></span>Software Update</div>
+          <div class="snote" style="margin-bottom:8px">Pulls the latest from GitHub. Small changes update instantly; big ones do a full reinstall.</div>
           <div class="srow"><span class="sk">Status</span><span class="sv" id="sys-avail">-</span></div>
           <div class="srow"><span class="sk">Commit</span><span class="sv" id="sys-ver" style="font-family:monospace;font-size:10px">-</span></div>
           <div class="srow"><span class="sk">Branch</span><span class="sv" id="sys-branch">-</span></div>
           <div id="sys-update-out" style="display:none;font-size:10px;background:var(--surf2);border:1px solid var(--border);border-radius:4px;padding:6px;margin:6px 0;white-space:pre-wrap;max-height:120px;overflow:auto;font-family:monospace;color:var(--muted)"></div>
-          <button class="sbtn" onclick="sysCheckVer()" style="margin-top:6px">↺ Check Status</button>
-          <button class="sbtn suc" id="sys-update-btn" onclick="sysUpdate()" style="margin-top:4px">⬆ Pull & Update from GitHub</button>
+          <button class="sbtn" onclick="sysCheckVer()" style="margin-top:6px">↺ Check for updates</button>
+          <button class="sbtn suc" id="sys-update-btn" onclick="sysUpdate()" style="margin-top:4px">⬆ Update now</button>
         </div>
         </div>
 
@@ -1064,7 +1073,14 @@ body:not(.fs) .fs-hud{display:none!important}
           <div id="oled-msg" style="display:none;margin-top:8px;font-size:10px;padding:4px 6px;border-radius:4px"></div>
         </div>
         <div class="scard">
-          <div class="scard-title"><span class="dot-acc"></span>Current Identity
+          <div class="scard-title"><span class="dot-acc"></span>How the target sees it</div>
+          <div class="snote" style="margin-bottom:8px">The identity the connected computer reads: the USB device and the monitor. Change these in the /stealth/ panel.</div>
+          <div class="srow"><span class="sk">Monitor</span><span class="sv ac" id="disp-name">-</span></div>
+          <div class="srow"><span class="sk">Maker</span><span class="sv" id="disp-mfr">-</span></div>
+          <div class="srow"><span class="sk">Serial</span><span class="sv" id="disp-ser" style="font-family:monospace;font-size:11px">-</span></div>
+        </div>
+        <div class="scard">
+          <div class="scard-title"><span class="dot-acc"></span>USB Device
             <span id="id-tag" class="tag tag-ok" style="margin-left:auto">Default</span>
           </div>
           <div class="srow"><span class="sk">Device</span><span class="sv ac" id="id-prod">-</span></div>
@@ -1192,18 +1208,11 @@ body:not(.fs) .fs-hud{display:none!important}
      the C790 add-on isn't installed), these 404 harmlessly and startWebRTC()
      detects the missing Janus global and no-ops back to MJPEG. -->
 <script src="/static/vendor/adapter.js" defer></script>
-<!-- Use kvmd's OWN janus.js (matches the running gateway version) instead of a
-     bundled copy, loaded as a module and exposed as the global Janus that the
-     WebRTC code below expects. -->
 <script type="module">try{const m=await import('/share/js/kvm/janus.js');window.Janus=m.Janus;}catch(e){console.warn('janus.js load failed',e);}</script>
 
 <script>
 // Auth
-// ===== kvmd/sidecar fetch shim ==============================================
-// DIY's UI calls its own /api/* backend. We intercept those and translate them
-// to kvmd + our /mb/* sidecars, returning DIY-shaped JSON so its render code
-// works unchanged. Real kvmd endpoints (info/hid/atx/streamer/ws/auth/gpio/msd)
-// pass straight through.
+// ===== kvmd/sidecar fetch shim: DIY /api/* -> kvmd + /mb/* =====================
 (function(){
   const _F=window.fetch.bind(window);
   const KV=['/api/ws','/api/hid','/api/atx','/api/info','/api/streamer','/api/auth','/api/gpio','/api/msd'];
@@ -1298,13 +1307,7 @@ async function changeMainPassword(){
 
 let _wsAuthFails=0;
 
-// ===== kvmd bridge ==========================================================
-// DIY's UI speaks JSON events over its own /ws; PiKVM's kvmd speaks a BINARY
-// control protocol over /api/ws. We keep DIY's entire capture/keyboard/mouse
-// code by re-implementing send() to translate its JSON into kvmd binary frames.
-//   Key   [0x01,state,...code]  Btn [0x02,state,...name]
-//   Abs   [0x03,xHi,xLo,yHi,yLo] Rel [0x04,squash,dx,dy] Wheel [0x05,squash,dx,dy]
-//   Ping  [0x00] -> pong [0xFF]
+// ===== kvmd bridge: DIY JSON events over /ws -> kvmd binary over /api/ws =====
 let ws=null, captured=false, _toastT=null;
 const ENC=new TextEncoder();
 const _WSURL=(location.protocol==='https:'?'wss:':'ws:')+'//'+location.host+'/api/ws';
@@ -2065,6 +2068,10 @@ function applyStatus(d){
     }
   }
   if(d.clients!=null) document.getElementById('ss-cl').textContent=String(d.clients);
+  if(d.display){
+    const g=(id,v)=>{const e=document.getElementById(id); if(e) e.textContent=v||'-';};
+    g('disp-name',d.display.name); g('disp-mfr',d.display.mfr); g('disp-ser',d.display.serial||'-');
+  }
   applyPowerHealth(d);
 }
 
@@ -2134,7 +2141,6 @@ function applyPowerHealth(d){
   _phSvcPill('ph-svc-sd', svc['stealth-dashboard']);
   _phSvcPill('ph-svc-us', d.stream?!!d.stream.running:null);
 }
-// kvmd has no single /api/status; synthesize DIY's status shape from kvmd APIs.
 function _fmtUptime(s){ if(!s)return ''; s=+s; const d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60);
   return (d?d+'d ':'')+h+'h '+m+'m'; }
 async function _jget(u){ try{const r=await fetch(u,{credentials:'include'});return await r.json();}catch(e){return null;} }
@@ -2347,16 +2353,21 @@ async function sysCheckVer(){
     const avail=document.getElementById('sys-avail');
     const btn=document.getElementById('sys-update-btn');
     if(d.update_available){
-      const n=d.commits_behind||1;
-      avail.textContent='⬆ Update available ('+n+' new commit'+(n===1?'':'s')+')';
+      const n=d.commits_behind||1, quick=(d.mode==='incremental');
+      avail.textContent=(quick?'Quick update':'Full upgrade')+' ('+n+' commit'+(n===1?'':'s')+')';
       avail.className='sv warn';
-      btn.textContent='⬆ Update available - Pull & Update';
+      btn.textContent=quick?('Quick Update ('+(d.changed||0)+' file'+(d.changed===1?'':'s')+')'):'Full Upgrade (reinstall)';
       btn.classList.add('pulse');
+      btn.disabled=false;
+      btn.dataset.mode=d.mode||'full';
+      const ud=document.getElementById('sys-dot-update'); if(ud) ud.className='sys-dot warn';
     }else{
-      avail.textContent='✓ Up to date';
+      avail.textContent='Up to date';
       avail.className='sv ok';
-      btn.textContent='⬆ Pull & Update from GitHub';
+      btn.textContent='✓ Up to date';       // distinct from the grey "Check" button, and inert
       btn.classList.remove('pulse');
+      btn.disabled=true;
+      const ud=document.getElementById('sys-dot-update'); if(ud) ud.className='sys-dot ok';
     }
     const out=document.getElementById('sys-update-out');
     out.textContent=d.out||'';out.style.display=d.out?'block':'none';
@@ -2385,15 +2396,22 @@ async function sysUpdate(){
     return;
   }
 
-  if(!confirm('Pull latest from GitHub and restart magicbridge?\nThis will briefly disconnect you.'))return;
-  toast('Updating…',30000);
+  const quick=(d0.mode==='incremental');
+  if(!confirm((quick?'Quick update':'Full upgrade')+': pull from GitHub and '
+      +(quick?'restart only the changed service':'reinstall + restart everything')
+      +'?\nThis briefly disconnects you.'))return;
+  toast(quick?'Quick update…':'Full upgrade…',quick?15000:30000);
   out.textContent='Pulling from GitHub…';out.style.display='block';
   try{
     const r=await fetch('/api/update',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'update'})});
     const d=await r.json();
-    out.textContent=d.out||'Done';
+    out.textContent=d.note||d.out||'Done';
     toast(d.ok?'Updated ✓':'Failed');
-    if(d.ok&&d.restarted)setTimeout(()=>{toast('Reconnecting…');setTimeout(()=>location.reload(),2000);},2000);
+    if(d.ok&&d.restarted){
+      const wait=(d.mode==='full')?90000:6000;
+      toast(d.mode==='full'?'Upgrading, reconnecting in ~90s…':'Reconnecting…',wait);
+      setTimeout(()=>location.reload(),wait);
+    }
   }catch(e){out.textContent='Error: '+e;toast('Error');}
 }
 
@@ -2549,7 +2567,7 @@ function hidAutoDcIdleChanged(){
 // which sys-nav-item is highlighted. Purely a display/grouping change -
 // none of the underlying cards, IDs, or their refresh functions moved or
 // changed, so nothing else in this file needed to know about it.
-const SYS_CAT_LABELS={monitoring:'Monitoring',security:'Security & account',power:'Power & maintenance',peripherals:'Peripherals & identity'};
+const SYS_CAT_LABELS={monitoring:'Monitoring',peripherals:'Devices & identity',security:'Security & account',power:'Power',update:'Software update'};
 function sysNavShow(cat){
   document.querySelectorAll('.sys-nav-item').forEach(b=>b.classList.toggle('active',b.dataset.cat===cat));
   document.querySelectorAll('.sys-cat').forEach(c=>c.classList.toggle('active',c.dataset.cat===cat));
