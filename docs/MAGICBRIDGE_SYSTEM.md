@@ -221,7 +221,7 @@ the Cowork memory store.
 
 ---
 
-## 6. Current status (2026-07-18)
+## 6. Current status (2026-07-19)
 
 **DIY:** Video capture WORKS at 1080p50 (auto-configures on boot, portable across
 targets). HID gadget works. OLED works. All services healthy. **Open:** partial
@@ -238,8 +238,21 @@ secret reset, realistic default MAC-OUI + Dell EDID at first-boot), update tooli
 (incremental `align_pi.py`, installer `--check`, OLED "Updating…"), and UI
 (Software-Update category, "how the target sees it" identity card, copy cleanup).
 Skipped what kvmd already provides (Janus/WebRTC, absolute-mouse HID descriptor).
-Last big batch was done with the device OFFLINE — committed + pushed, pending an
-`align_pi.py` deploy + on-device verification. See `TASK_TRACKER.md`.
+Login is now `magicbridge`/`magicbridge` (kvmd htpasswd, sidecar creds in sync);
+the stealth panel has the DIY terminal look + a `stealthbridge` unlock gate.
+
+**Latest sync (2026-07-19, device ONLINE at `172.16.20.212`).** Caught PiKVM up to
+DIY's capture-detect + installer-bugfix round: **8b** capture auto-detect = SKIP
+(device-verified CSI-only — `/dev/video0`=unicam/TC358743, no USB UVC; kvmd owns
+the pipeline). **5d(a)** tmpfs `mode=0755` = N/A (we mount no tmpfs log dir;
+`/var/log` is tmpfs natively). **5d(b)** SIGPIPE guard = FIXED — both
+`tr…urandom|head` pipelines guarded (`|| true`), verified on-device (unguarded
+aborts rc=141 under pipefail, guarded rc=0). **20** imaging = MAC-strip already
+present, `video.mode=auto` N/A, added `*.mb-bak` residual-tell strip. Reconcile
+sweep confirmed the anonymity model holds live: RAM logs, access-log off, no
+`_pikvm` on the wire, realistic stable hostname + persisted vendor MAC, Dell EDID,
+Logitech USB. Still pending hardware (HDMI+USB): live video/HID E2E. See
+`TASK_TRACKER.md`.
 
 ---
 

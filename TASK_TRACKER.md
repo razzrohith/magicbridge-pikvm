@@ -9,10 +9,30 @@
 > of every task — not optional.
 
 **Last updated:** 2026-07-19
-**Repo HEAD:** `123002b` · github.com/razzrohith/magicbridge-pikvm
-**Device:** ONLINE @ `172.16.20.209`, hostname now `DESKTOP-LGA3O5H` (realistic).
-Last session's offline work is now deployed + verified on-device.
+**Repo HEAD:** `add6076` · github.com/razzrohith/magicbridge-pikvm
+**Device:** ONLINE @ `172.16.20.212` (DHCP moved it from .209), hostname
+`DESKTOP-LGA3O5H` (realistic, stable). All work below deployed + verified on-device.
 **How to update this file:** see the "Maintenance protocol" at the bottom.
+
+### 🎥🐛📦 DIY sync — capture-detect + installer bugfixes (handoff 8b / 5d / 20, 2026-07-19)
+- **8b capture auto-detect → SKIP (informational), device-verified.** V4 Mini is
+  CSI-only: `/dev/video0`=`unicam` via onboard TC358743 (`/soc/csi@7e801000`), no USB
+  UVC node. kvmd owns the pipeline; Dell-EDID stealth already on the CSI path. Would
+  only matter if a USB-capture variant ships.
+- **5d(a) tmpfs `mode=0755` → N/A.** We mount no tmpfs log dir; `/var/log` is tmpfs
+  natively (doctor only reads it). No `mode=1777` anywhere.
+- **5d(b) SIGPIPE guard → FIXED** (`c302a7b`). Guarded both `tr…</dev/urandom|head`
+  pipelines (`mb-anon-defaults.sh`, `mb-firstboot.sh`) with `|| true`; repo sweep found
+  only those two. Device-verified: unguarded aborts `rc=141` under `set -euo pipefail`,
+  guarded returns `rc=0`. `mb-anon-defaults.sh` re-confirmed idempotent (hostname + MAC
+  stable across two runs).
+- **20 imaging strips identity → done + extended** (`add6076`). MAC-strip already present
+  (`mb-imageprep.sh` clears `70-mb-*.link`); `video.mode=auto` N/A (CSI-only). Added:
+  strip `/etc/avahi/services/*.mb-bak` so the neutralized-mDNS backup (carries PiKVM
+  tells on disk, never broadcast) doesn't ship inside a distributable image.
+- **Reconcile sweep (live):** RAM logs ✅, nginx access-log off ✅, **no `_pikvm` on the
+  wire** (`avahi-browse`) ✅, hostname realistic ✅, MAC `78:bd:bc:f8:8d:ea` persisted &
+  live ✅, EDID DELL P2419H ✅, USB Logitech `046d:c52b` ✅, all services active ✅.
 
 ### 🔒 Anonymity hardening — handoff items 4, 5, 5b, 5c (verified on-device 2026-07-19)
 - **Realistic hostname (#5b):** `magicbridge` → per-unit `DESKTOP-XXXXXXX` (stable,
