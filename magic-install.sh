@@ -6,7 +6,7 @@
 #  Usage (on the V4 Mini, after flashing official PiKVM OS + first boot):
 #     curl -fsSL https://raw.githubusercontent.com/razzrohith/magicbridge-pikvm/main/magic-install.sh | sudo bash
 #  or, from a local clone:
-#     sudo ./magic-install.sh [--branch main] [--no-reboot] [--update] [--dry-run]
+#     sudo ./magic-install.sh [--branch main] [--no-reboot] [--update] [--check] [--dry-run]
 #
 #  Safe & idempotent: re-running upgrades in place. Reverts with ./uninstall.sh
 #  Requires: PiKVM OS (Arch Linux ARM) with kvmd. Refuses to run elsewhere.
@@ -21,6 +21,7 @@ BRANCH="main"
 DO_REBOOT=1
 DRY_RUN=0
 UPDATE=0
+CHECK=0
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-.}")" 2>/dev/null && pwd || echo /tmp)"
 
 # ---- pretty logging -------------------------------------------------
@@ -57,6 +58,7 @@ while [ $# -gt 0 ]; do
     --branch) BRANCH="$2"; shift 2;;
     --no-reboot) DO_REBOOT=0; shift;;
     --update) UPDATE=1; shift;;
+    --check) CHECK=1; shift;;
     --dry-run) DRY_RUN=1; shift;;
     -h|--help) grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0;;
     *) die "unknown arg: $1";;
@@ -212,9 +214,36 @@ phase6_enable() {
 }
 
 # =====================================================================
+#  Doctor — read-only status report (--check). No writes, no deploy.
+# =====================================================================
+phase_check() {
+  say "MagicBridge doctor (read-only status)"
+  local okall=1
+  for s in kvmd kvmd-nginx kvmd-otg magicbridge-net magicbridge-stealth magicbridge-agent; do
+    if systemctl is-active --quiet "$s"; then ok "service $s active"; else warn "service $s NOT active"; okall=0; fi
+  done
+  [ -d "$INSTALL_ROOT/.git" ] && ok "git tree at $INSTALL_ROOT" || { warn "no git tree at $INSTALL_ROOT"; okall=0; }
+  grep -q 'magicbridge.conf' /etc/kvmd/nginx/nginx.conf.mako 2>/dev/null && ok "nginx include wired" || { warn "nginx include NOT wired"; okall=0; }
+  grep -q 'MagicBridge' /usr/share/kvmd/web/login/index.html 2>/dev/null && ok "branded login deployed" || warn "login page not branded (out-of-tree, SFTP it)"
+  [ -f "$INSTALL_ROOT/branding/branding.env" ] && ok "branding.env present" || warn "branding.env missing"
+  [ -e /var/lib/magicbridge/.mb-firstboot-done ] && ok "first-boot finalized" || warn "first-boot marker absent (would run on next boot)"
+  findmnt -no OPTIONS / 2>/dev/null | grep -qw ro && ok "rootfs read-only" || warn "rootfs is RW (expected ro)"
+  local ser vid
+  ser=$(cat /sys/kernel/config/usb_gadget/kvmd/strings/0x409/serialnumber 2>/dev/null || true)
+  if [ "$ser" = "CAFEBABE" ]; then warn "USB serial is CAFEBABE (a fake-device tell!)"; okall=0
+  elif [ -n "$ser" ]; then ok "USB serial realistic ($ser)"; fi
+  vid=$(cat /sys/kernel/config/usb_gadget/kvmd/idVendor 2>/dev/null || true)
+  [ -n "$vid" ] && ok "USB VID=$vid (0x046d Logitech expected)"
+  findmnt -no FSTYPE /var/log 2>/dev/null | grep -q tmpfs && ok "/var/log is tmpfs (RAM-only logs)" || warn "/var/log NOT tmpfs (logs may hit the SD)"
+  echo
+  [ "$okall" = 1 ] && ok "doctor: all green" || warn "doctor: some checks need attention (above)"
+}
+
+# =====================================================================
 main() {
   banner
   phase0_preflight
+  if [ "$CHECK" = 1 ]; then phase_check; fs_ro; exit 0; fi
   phase1_fetch
   phase2_deps
   phase3_rebrand
