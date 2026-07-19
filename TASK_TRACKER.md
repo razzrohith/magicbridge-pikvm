@@ -111,10 +111,22 @@
   (those are recreated with `printf >` / `openssl`).
 - ⏳ Next: flash a 2nd card from `dist.img`, confirm the OLED→hotspot→WiFi flow, then
   prove uniqueness (hostname / MAC / SSH host key / machine-id all differ from golden).
-- ⚠ **Before distributing to anyone else:** zero the free space — deleting the ISO did
-  not erase its blocks, so remnants are still recoverable from the raw image (also
-  what makes it compress from 30 GB to ~a few hundred MB). Fine as-is for flashing
-  our own cards. `pishrink` auto-expand on Arch + read-only root remains unvalidated.
+- **SHRUNK + hardened (`61a6e5a`): 29.72 GB -> 6.72 GB.** Only ~2.8 GB was ever in
+  use; the bulk was the empty 23.2 GB MSD partition. `build-image.sh --shrink`
+  resize2fs -M's the MSD fs, shrinks the partition (via **sfdisk** — parted refuses
+  its "shrinking can cause data loss" prompt even under `-s`) and truncates the file.
+  Refuses unless PIMSD is genuinely the LAST partition. Root free space was zeroed
+  first, so deleted-file remnants (WiFi conf, SSH keys, logs, history) are erased —
+  and truncating the MSD region physically removed the deleted-ISO remnants, so the
+  earlier "not safe to distribute" caveat is now RESOLVED.
+- **`mb-expand-msd.sh` (new)** grows MSD back to fill whatever card the image is
+  flashed onto, on first boot. Finds the partition BY LABEL (`PIMSD`), refuses to
+  grow anything that is not last, no-ops when already full; every failure path just
+  remounts and exits 0 (worst case: a smaller MSD — root is a different partition).
+  **Untested on hardware** until the first flash.
+- Final: 19/19 `--verify` pass after shrink; partition table p1 256M / p2 256M /
+  p3 6G / p4 224.6M. `.img.xz` produced for storage/sharing (Imager flashes it
+  natively). `pishrink` was NOT needed and remains unused.
 
 ---
 

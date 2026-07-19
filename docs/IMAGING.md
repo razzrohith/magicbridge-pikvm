@@ -93,17 +93,28 @@ wsl -d Ubuntu -u root -e bash .../build-image.sh --verify /mnt/e/magicbridge-pik
 re-armed in the right target, TLS stripped, MSD empty, defaults kept…). Exits **1**
 if any fail — do not distribute an image that fails.
 
-### 4. Shrink it (optional)
+### 4. Shrink it (recommended — 29.72 GB → ~6.7 GB)
+Only ~2.8 GB is ever in use; the bulk is the **empty 23.2 GB MSD partition**. Because
+MSD is the *last* partition it can be shrunk and the file truncated. First zero the
+root free space (erases deleted-file remnants **and** makes it compress), then shrink:
 ```
-sudo pishrink.sh -a magicbridge-pikvm-dist.img
+# with p3 mounted:  dd if=/dev/zero of=<mnt>/zero.fill bs=4M; sync; rm -f <mnt>/zero.fill
+sudo bash provision/build-image.sh --shrink magicbridge-pikvm-dist.img
+xz -T0 -k magicbridge-pikvm-dist.img        # optional -> ~1 GB, Imager flashes .img.xz
 ```
-> ⚠ **Layout caveat:** `pishrink` targets the **last** partition, which here is
-> **msd (p4)**, not root — that is actually what you want size-wise (p4 is the bulk
-> of the card and `build-image.sh` just emptied it). But pishrink's auto-expand hook
-> is **Pi-OS-specific**, and PiKVM is Arch with a **read-only root**, so `-a` may not
-> re-expand on boot. **Not yet validated on hardware.** If it misbehaves, the safe
-> fallback is to skip pishrink and compress instead (`xz -T0 dist.img` → Imager
-> flashes `.img.xz` natively); that needs a card at least as large as the original.
+`--shrink` uses **sfdisk, not parted** (parted refuses its "shrinking can cause data
+loss" prompt even under `-s`, so `resizepart` always returns 1), and refuses to run
+unless `PIMSD` really is the last partition.
+
+**MSD capacity is restored automatically:** `mb-expand-msd.sh` runs on first boot and
+grows MSD to fill whatever card you flashed. It locates the partition by its `PIMSD`
+label (never by index), refuses to grow anything that isn't last, no-ops if already
+full, and every failure path just remounts and exits 0 — worst case a unit boots with
+a smaller virtual-media area, since root is a different partition.
+
+> `pishrink` is **not used** — it targets the last partition (correct here) but its
+> auto-expand hook is Pi-OS-specific and PiKVM is Arch with a read-only root.
+> `--shrink` + `mb-expand-msd.sh` replaces it with something that fits this stack.
 
 ### 5. Distribute + flash
 Give users the `.img`. In **Raspberry Pi Imager**: *Choose OS → Use custom →*
@@ -139,19 +150,12 @@ The GitHub-connected self-update already exists: cockpit **System → Apply upda
 `/opt/magicbridge` + restart services), or `magic-install.sh --update`. Out-of-tree
 files (the login page) refresh via `--update`, not the in-UI button.
 
-## ⚠ Before giving the image to someone ELSE: zero the free space
-`build-image.sh` deletes the golden unit's files, but deleting does **not** erase the
-underlying blocks — the raw image still contains recoverable remnants (e.g. the ISO
-that was on the MSD partition). Fine for flashing your own cards; **not** fine for
-distribution. Zero the free space first, which also makes the image compress from
-~30 GB to a few hundred MB:
-```
-# per ext4 partition (root p3 and msd p4), with the partition mounted:
-dd if=/dev/zero of=<mnt>/zero.fill bs=4M status=progress || true; sync; rm -f <mnt>/zero.fill
-# then compress - Raspberry Pi Imager flashes .img.xz natively:
-xz -T0 -v magicbridge-pikvm-dist.img
-```
-(`zerofree` on the *unmounted* fs does the same job if installed.)
+## Residual data: why step 4 is not optional before distributing
+Deleting a file does **not** erase its blocks, so an armed-but-unshrunk image still
+holds recoverable remnants (the golden unit's WiFi config, SSH host keys, logs — and
+whatever ISO was on the MSD partition). Step 4 resolves both: zeroing the root free
+space overwrites the deleted-file remnants, and truncating the MSD region physically
+removes the ISO remnants along with it. Do step 4 before handing an image to anyone.
 
 ## Status (2026-07-19)
 - `build-image.sh`: **built + run on a REAL card image.** A 29.72 GB read of the
