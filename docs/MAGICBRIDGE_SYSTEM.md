@@ -254,9 +254,12 @@ sweep confirmed the anonymity model holds live: RAM logs, access-log off, no
 Logitech USB. **Live video now VERIFIED (HDMI connected):** capture works E2E —
 source sends 1080p (Dell EDID honored), ustreamer locks to 1920×1080 on-demand, the
 cockpit shows the live frame (MJPEG confirmed). Fixed DIY transport labels
-(C790/USB-dongle → H.264/fallback). Still pending hardware: HID input to a target
-(needs the USB gadget cable) + WebRTC negotiation in a real browser. See
-`TASK_TRACKER.md`.
+(C790/USB-dongle → H.264/fallback). **HID input now VERIFIED too (USB K/M gadget
+connected):** keyboard E2E via a Caps Lock LED round-trip (host→gadget feedback,
+state restored) and absolute mouse positioning confirmed on the captured screen
+(cursor landed at both corners on command). The full KVM stack — video + keyboard
++ mouse — now works on real hardware. Still pending: WebRTC/H.264 in a real browser
+(headless fell back to MJPEG, which is proven at 1080p). See `TASK_TRACKER.md`.
 
 ---
 

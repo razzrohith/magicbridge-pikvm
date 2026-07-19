@@ -59,11 +59,20 @@
 - Fixed a UI carry-over exposed by the live test: transport labels said
   `WebRTC (C790/CSI)` / `MJPEG (USB dongle)` (DIY board name + nonexistent dongle) →
   `WebRTC (H.264)` / `MJPEG (fallback)` (commit `1c2f27f`).
-- ⏳ Still open: **HID input** to a target (needs the USB gadget cable to a target
-  PC — not exercised, avoided injecting input into the live source); WebRTC/H.264
-  negotiation in a real browser (headless fell back to MJPEG); "Video FPS" readout
-  shows "—" in MJPEG-fallback (cosmetic). Minor: MAC/hostname across a real reboot;
-  a full clean-flash image build.
+### ⌨️🖱 HID input VERIFIED on-device (USB K/M gadget connected, 2026-07-19)
+- Gadget bound to the host (`UDC=fe980000.usb`), `mouse.online:true absolute:true`.
+- **Keyboard E2E ✅** — tapped Caps Lock via `/api/hid/events/send_key`, kvmd's
+  `leds.caps` flipped `false→true` (the host received the key, toggled state, and
+  reported the LED back to the gadget — full round-trip). Second tap restored it;
+  no characters typed. `keyboard.online` also came `true` after activity.
+- **Mouse (absolute) E2E ✅** — injected `send_mouse_move` to opposite corners; the
+  captured screen showed the cursor land top-left, then bottom-right (hover popped
+  the taskbar clock tooltip). Precise 1:1 absolute positioning. Cursor returned to
+  center; no clicks issued on the live target.
+- ⏳ Still open: WebRTC/H.264 negotiation in a REAL browser (headless fell back to
+  MJPEG — MJPEG path is proven at 1080p); "Video FPS" readout shows "—" on the
+  MJPEG-fallback path (cosmetic). Minor: MAC/hostname across a real reboot; a full
+  clean-flash image build.
 
 ---
 
