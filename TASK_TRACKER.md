@@ -132,6 +132,31 @@
   MSD size on the first flashed card; if it did not grow, the unit still works fine
   (root is a separate partition) and only virtual-media capacity is affected.
 
+### 🔥 First real flash: bricked boot → root-caused + fixed (2026-07-19)
+- Flashed `dist.img` onto a **238 GB** card; unit came up on WiFi (ping + **unique
+  Intel MAC `a0:88:b4`**, different from golden `78:bd:bc` ✅) BUT **no service
+  listened** — SSH/kvmd/web all refused, ~17 min. OLED showed an IP (a stale
+  retained frame, not proof of health).
+- **Root cause:** `mb-expand-msd` grew MSD to ~232 GB (partition table confirmed on
+  the card), but stock PiKVM fstab mounts `PIMSD` **without `nofail`**, so the
+  failed/racy mount took down `local-fs.target` and blocked the whole boot past
+  networking. Exactly the untested-code risk flagged when the expand was added.
+- **Fix (`649dfcd`):** build-image now sets `nofail,x-systemd.device-timeout=15s`
+  (fsck pass 0) on `PIMSD` + `PIPST` — a non-essential partition can NEVER block
+  boot again (worst case: MSD unmounted). `mb-expand-msd` hardened with
+  `udevadm settle` (stale-table reread race) + a second `e2fsck -p`. `--verify` now
+  asserts nofail (21 checks). Tested on the synthetic image (idempotent).
+- **Recovery:** `wsl --mount` of the physical card needs admin (unavailable), so
+  patched the existing `dist.img` in place instead (loop-mount a file needs no
+  elevation): added nofail + refreshed provision scripts, re-verified 21/21,
+  recompressed. User re-flashing the same card.
+- **STEALTH LAYER PROVEN on real hardware (from the laptop/target):** USB =
+  Logitech "USB Receiver" `046D:C52B` (no Pi/Linux/gadget tell, no phantom drive);
+  HDMI EDID = Dell P2419H (DEL, no capture-card tell); LAN MAC = Intel OUI, unique
+  per unit. The anonymity model works; only the boot-robustness bug remained.
+- ⏳ Pending: re-flash boots (nofail guarantees it) → full on-device uniqueness +
+  anonymity + services sweep; confirm MSD expand result with the hardened script.
+
 ---
 
 ## 🟢 Health snapshot — what works right now
