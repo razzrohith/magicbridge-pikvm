@@ -611,8 +611,8 @@ body:not(.fs) .fs-hud{display:none!important}
           <div class="scard-title"><span class="dot-acc"></span>Video Quality</div>
           <div class="srow"><span class="sk">Transport</span>
             <select class="ssel" id="sel-mode" style="width:auto;margin:0">
-              <option value="h264" selected>WebRTC (C790/CSI) ★</option>
-              <option value="mjpeg">MJPEG (USB dongle)</option>
+              <option value="h264" selected>WebRTC (H.264) ★</option>
+              <option value="mjpeg">MJPEG (fallback)</option>
             </select>
           </div>
           <div class="srow"><span class="sk">Resolution</span>
@@ -1850,20 +1850,20 @@ async function applyVideo(){
   }catch(e){toast('Request failed');}
 }
 
-// --- WebRTC (C790/H.264 via Janus) -----------------------------------
+// --- WebRTC (H.264 via kvmd's Janus) ---------------------------------
 // WebRTC is the preferred/default transport (near-zero-latency hardware
-// H.264 over the C790/CSI path). MJPEG is the automatic fallback - used
-// whenever WebRTC can't actually be established, not just when the
-// dropdown says "mjpeg". Detection happens at two levels:
-//   1. Server-side: video.py's _start_ustreamer_h264 falls back to mjpeg
-//      on its own if ustreamer itself won't start in h264 mode (no C790,
-//      no Janus-enabled build, etc). /api/status then reports the real
-//      running mode, which syncVideoTransport() below picks up.
+// H.264 off the onboard CSI capture, TC358743/unicam on the V4 Mini).
+// MJPEG is the automatic fallback - used whenever WebRTC can't actually
+// be established, not just when the dropdown says "mjpeg". Detection
+// happens at two levels:
+//   1. Server-side: kvmd's streamer runner falls back to mjpeg on its
+//      own if ustreamer won't start in h264 mode. /api/status then
+//      reports the real running mode, which syncVideoTransport() picks up.
 //   2. Client-side: even when ustreamer's h264 sink IS running, Janus
-//      itself might not be (e.g. janus-webrtc.service not started yet -
-//      that's the current state until the C790 physically arrives). The
+//      itself might not negotiate (headless/older browsers, STUN, etc).
+//      Live capture itself is verified working at 1080p over MJPEG; the
 //      Janus connect/attach error handlers and the connect-timeout guard
-//      below catch that case and switch the UI back to MJPEG live,
+//      below catch a WebRTC failure and switch the UI back to MJPEG live,
 //      without waiting for a page reload or another status poll.
 let _janus = null, _janusHandle = null, _activeTransport = null, _webrtcTimeout = null;
 
