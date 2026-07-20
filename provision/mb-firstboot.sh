@@ -69,9 +69,17 @@ fi
 echo "applying branding"
 python3 "$ROOT/branding/apply_branding.py" --root "$ROOT" >/dev/null 2>&1
 
-# 6. mark done
+# 6. mark done — REMOUNT RW FIRST. mb-secret-reset and mb-anon-defaults each end
+#    by remounting the rootfs read-only, so by here the fs is RO and a plain write
+#    fails silently (2>/dev/null hid it). A missing marker means first-boot RE-RUNS
+#    every boot -> mb-secret-reset re-wipes the just-entered WiFi -> provisioning
+#    LOOP. This was the real loop bug (first-boot itself succeeds in ~12s). Always
+#    force rw, write the marker, verify it exists, and sync it to disk.
+mb_rw
 mkdir -p "$(dirname "$MARKER")" 2>/dev/null
 date > "$MARKER" 2>/dev/null
+[ -e "$MARKER" ] || echo "WARNING: failed to write first-boot marker $MARKER"
+sync
 
 mb_ro
 echo "[$(date)] mb-firstboot done — handing off to WiFi onboarding"
