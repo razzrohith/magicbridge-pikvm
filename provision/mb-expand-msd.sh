@@ -53,38 +53,31 @@ if [ "$free" -lt 131072 ]; then
 fi
 log "growing $MSDDEV (partition $PARTNUM on $DISK), ${free} sectors free"
 
-umount "$MP" 2>/dev/null
-
-# sfdisk first (deterministic, never prompts), parted as a fallback. Growing the
-# LAST partition is safe: there is nothing after it to overwrite.
+# Grow the LAST partition (safe: nothing after it to overwrite). Do NOT --no-tell-
+# kernel here: we want the kernel to pick up the new size for the mounted last
+# partition (BLKPG). sfdisk is deterministic; parted is a fallback.
 newsize=$(( disk_sz - msd_start ))
-if ! echo ",${newsize}" | sfdisk -N "$PARTNUM" --force --no-reread --no-tell-kernel "$DISK" >/dev/null 2>&1; then
+if ! echo ",${newsize}" | sfdisk -N "$PARTNUM" --force "$DISK" >/dev/null 2>&1; then
     log "sfdisk grow failed - trying parted"
-    if ! parted -s -f "$DISK" resizepart "$PARTNUM" 100% >/dev/null 2>&1; then
-        log "resizepart failed - leaving MSD as-is"
-        mount "$MP" 2>/dev/null
-        exit 0
-    fi
+    parted -s -f "$DISK" resizepart "$PARTNUM" 100% >/dev/null 2>&1 || \
+        { log "resizepart failed - leaving MSD as-is"; exit 0; }
 fi
-# Make the kernel actually re-read the enlarged partition before resize2fs, else
-# resize2fs sees the OLD size. udevadm settle is the reliable part; partprobe/partx
-# are best-effort nudges. (The stale-table race is what wedged the first flashed
-# unit; PIMSD is now `nofail` so even a failure here can no longer block boot.)
 partprobe "$DISK" 2>/dev/null || partx -u "$DISK" 2>/dev/null
 udevadm settle --timeout=10 2>/dev/null
 sleep 1
 
-# Always leave the filesystem CLEAN, whatever happens, so the boot-time mount
-# (nofail, errors=remount-ro) never trips on a dirty/half-resized fs.
-e2fsck -f -p "$MSDDEV" >/dev/null 2>&1   # resize2fs requires a clean fs
+# Grow the filesystem ONLINE. kvmd keeps MSD mounted (ro), so an unmount is
+# unreliable (device busy) and an offline resize then fails - which is exactly
+# what left MSD un-grown on the first real unit. ext4 online-grow works fine on a
+# mounted fs; we only need it rw for the resize, then restore the ro that kvmd
+# expects. No forced fsck (slow on a huge fs, and a mounted fs can't be fsck'd).
+was_ro=""; mount | grep -q " $MP .*[(,]ro[,)]" && was_ro=1
+mount -o remount,rw "$MP" 2>/dev/null
 if resize2fs "$MSDDEV" >/dev/null 2>&1; then
     log "MSD grown to $(blockdev --getsize64 "$MSDDEV" 2>/dev/null) bytes"
 else
     log "resize2fs failed - MSD stays at its current size (boot is safe: nofail)"
 fi
-# NOTE: no forced `e2fsck -f` AFTER resize — on a large (e.g. 232 GB) fs that full
-# check can take minutes; resize2fs already leaves the fs consistent, and this
-# script must never be slow enough to matter to whatever calls it.
-
-mount "$MP" 2>/dev/null
+# Restore the read-only mount kvmd expects (only if it was ro to begin with).
+[ -n "$was_ro" ] && mount -o remount,ro "$MP" 2>/dev/null
 exit 0
