@@ -132,6 +132,24 @@
   MSD size on the first flashed card; if it did not grow, the unit still works fine
   (root is a separate partition) and only virtual-media capacity is affected.
 
+### 🛡️ FRESH-FLASH NOW SELF-COMPLETING + BULLETPROOF (mb-firstboot-late, 2026-07-20)
+Made a fresh flash finish itself with zero manual steps, and immune to the 3 bugs above.
+- **New post-boot oneshot `mb-firstboot-late.service`** (`6cde694`): (1) grows MSD to fill
+  the card (ONLINE resize), (2) applies a UNIQUE per-unit EDID monitor serial. Both need a
+  fully-up system, which is why they can't live in early mb-firstboot. Ordered
+  `After=kvmd.service/multi-user.target` with NOTHING depending on it -> can never block
+  boot or WiFi. Marker-guarded -> runs once (EDID serial + MSD size stay stable). Best-
+  effort; worst case = smaller MSD / baked EDID serial, never a broken/looping unit.
+- **PROVEN live on .171**: Result=success, MSD-grow no-ops when full, EDID serial ->
+  CN05062NN (valid Dell P2419H, confirmed in the persisted hex), marker written, services
+  untouched.
+- Wired everywhere: build-image enables it (self-heal + clear marker), magic-install
+  installs+enables, mb-imageprep clears its marker. --verify now 23 checks.
+- **Net effect:** flash to any blank card -> boot -> hotspot -> WiFi -> comes up unique +
+  stealthed AND fills the card + unique EDID, on its own. The failure classes are designed
+  out: nofail (can't block boot), rw-before-marker (can't loop), post-boot finalize (can't
+  stall provisioning).
+
 ### ✅ FLASHED UNIT FULLY WORKING + VERIFIED (172.16.20.171, 2026-07-20)
 The distributable-image path is proven end-to-end after fixing 3 real hardware-only bugs.
 - **Real loop bug (`2a03804`):** first-boot SUCCEEDS in ~12s, but mb-secret-reset /
