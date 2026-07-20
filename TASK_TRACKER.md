@@ -132,6 +132,28 @@
   MSD size on the first flashed card; if it did not grow, the unit still works fine
   (root is a separate partition) and only virtual-media capacity is affected.
 
+### ✅ FLASHED UNIT FULLY WORKING + VERIFIED (172.16.20.171, 2026-07-20)
+The distributable-image path is proven end-to-end after fixing 3 real hardware-only bugs.
+- **Real loop bug (`2a03804`):** first-boot SUCCEEDS in ~12s, but mb-secret-reset /
+  mb-anon-defaults each end by remounting rootfs **read-only**, so the done-marker
+  write (`date > .mb-firstboot-done`) failed silently on a RO fs. No marker → first-boot
+  re-runs every boot → re-wipes the just-entered WiFi → provisioning loop. Diagnosed via
+  on-device data pulled over the setup hotspot (a self-contained offline fix script, since
+  joining the hotspot kills the laptop's internet). Fix: force rw + verify + sync before
+  the marker. (All earlier timeout theories were wrong.)
+- **MSD grow (`3d47e9a`):** offline resize2fs failed (kvmd keeps MSD mounted) → switched to
+  ONLINE resize (remount rw → resize2fs → ro). MSD 224MB → **229GB**, writable.
+- **Verified UNIQUE vs golden** (all differ): hostname DESKTOP-B5BFSPR, MAC 34:17:eb (HP
+  OUI, stable), machine-id 462edcb7, own SSH host key + TLS cert, EDID serial CN21233ZK.
+- **All services active**, web login magicbridge/magicbridge → 200.
+- **Anonymity confirmed from the TARGET (laptop):** USB = Logitech "USB Receiver"
+  046D:C52B (kbd+mouse+mass-storage, NO Pi/Linux/Gadget/File-Stor tell, no phantom drive);
+  HDMI EDID = DELL P2419H serial CN21233ZK (real monitor, unique per unit); on-device: RAM
+  logs, no _pikvm on the wire, clean hostname.
+- ⚠ Board logged **Undervoltage** — recommend a stronger USB-C PSU for stability.
+- Minor: mb-firstboot's EDID-serial randomize didn't take on first boot (applied manually
+  live); worth confirming the firstboot EDID step on the next build.
+
 ### 🔥 First real flash: bricked boot → root-caused + fixed (2026-07-19)
 - Flashed `dist.img` onto a **238 GB** card; unit came up on WiFi (ping + **unique
   Intel MAC `a0:88:b4`**, different from golden `78:bd:bc` ✅) BUT **no service
