@@ -75,14 +75,6 @@ check PiKVM's own equivalent · **[PORT-concept]** take the idea, not the code.
    logs don't exist yet). See item 1. (2) A `tr -dc … </dev/urandom | head -c N`
    generator SIGPIPEs `tr` (rc 141); under `set -euo pipefail` that aborts the
    whole script — guard any such pipeline with `|| true`.
-   **→ PiKVM 2026-07-19:** (1) N/A — we mount no tmpfs log dir of our own;
-   `/var/log` is tmpfs natively (we only read-only *check* it in the `--check`
-   doctor), so there is no `mode=1777` to fix. (2) FIXED (commit `c302a7b`) —
-   guarded both `tr … </dev/urandom | head -c N` pipelines (`mb-anon-defaults.sh`,
-   `mb-firstboot.sh`) with `|| true`; a repo sweep found only those two. Neither
-   script runs under `pipefail` today, but the guard is device-verified: the exact
-   unguarded pipeline under `set -euo pipefail` aborts `rc=141`, the guarded one
-   returns `rc=0` with 7 chars.
 
 ## 📶 WiFi / provisioning
 6. **Captive-portal dnsmasq `:53` conflict** `[VERIFY]` — DIY's setup-AP dnsmasq
@@ -113,12 +105,6 @@ check PiKVM's own equivalent · **[PORT-concept]** take the idea, not the code.
    monitor identity) is **CSI-only** (it lives in the TC358743), so on the USB
    path the dongle's own EDID is what the target sees. If PiKVM ever ships a
    USB-capture variant, port this detection; otherwise it's informational.
-   **→ PiKVM: SKIP (informational), device-verified 2026-07-19.** V4 Mini capture
-   is `/dev/video0` = `unicam` via the onboard TC358743 CSI bridge
-   (`/soc/csi@7e801000`); `v4l2-ctl` shows no USB UVC node — it is CSI-only. kvmd
-   owns the pipeline natively and the restricted Dell-EDID stealth already lives on
-   the CSI path (`kvmd-edidconf` reads DELL P2419H / DEL). Nothing to port unless a
-   USB-capture variant ever ships; carry-overs (a)/(b) are then the design to reuse.
 
 ## 🖱 HID / input
 9. **Absolute + relative mouse** `[PORT-UI-only]` — DIY had to build a whole
@@ -168,15 +154,6 @@ check PiKVM's own equivalent · **[PORT-concept]** take the idea, not the code.
     units collide/cross-link: the spoofed MAC (`00-mb-macspoof.conf` +
     `mac_persist={}`) AND `video.mode=auto` (so a unit flashed onto USB-capture
     hardware doesn't inherit the golden unit's CSI mode). Do the same for PiKVM.
-    **→ PiKVM 2026-07-19:** MAC strip already done — `mb-imageprep.sh` clears
-    `/etc/systemd/network/70-mb-*.link` (PiKVM persists the spoof in a
-    systemd-networkd `.link`, not NM's `00-mb-macspoof.conf`), so first boot picks
-    a fresh per-unit vendor MAC. `video.mode=auto` is N/A: the V4 Mini is
-    CSI-only/kvmd-native — no per-unit capture mode to leak. Added (commit
-    `add6076`): image-prep now also strips `/etc/avahi/services/*.mb-bak` — our
-    mDNS neutralization leaves a `pikvm.service.mb-bak` backup that avahi never
-    broadcasts but which carries PiKVM tells on the filesystem (found in the
-    reconciliation sweep).
 21. **Idempotent installer + `--check` doctor** `[PORT-concept]` — installer is
     safe to re-run and has a read-only status report. Fold into `magic-install.sh`;
     add `--check`. (Mirrors PiKVM's open "installer gap" about file-level rebrands
@@ -187,11 +164,88 @@ check PiKVM's own equivalent · **[PORT-concept]** take the idea, not the code.
     `align_pi.py` (git-reset): trivial diffs = fast path, structural = full.
 23. **OLED "Updating…" during self-update; canonical repo URL pinned; git
     `safe.directory` for the root-run updater** `[PORT-concept / VERIFY]`.
+24. **Four first-boot bugs the DIY end-to-end flash test caught** `[PORT — VERIFY hard]`
+    — every one appeared ONLY on a real flash, never on the build host. Check
+    PiKVM's equivalents before you ship a base image:
+    - **(i) Fresh flash boots on WiFi but SSH + web are DEAD.** The image ships
+      with the SSH host keys + TLS cert STRIPPED (correct — per-unit), so sshd and
+      the web server start EARLY and fail before first-boot regenerates them, and
+      nothing restarts them → the unit looks up (OLED shows its IP) but nothing
+      answers. Fix: after `mb-secret-reset` regenerates the keys/cert, RESTART
+      those early services. (kvmd: `kvmd-nginx` + sshd; regen must be
+      unconditional too — see IMAGING.md status note.)
+    - **(ii) That restart can DEADLOCK first-boot.** Restarting a service ordered
+      *after* the first-boot unit (DIY: `magicbridge`; kvmd: `kvmd`/`kvmd-nginx`
+      if ordered after your first-boot) from *inside* first-boot blocks forever —
+      the restart waits for first-boot to finish, which is waiting on the restart.
+      Symptom: hangs before WiFi provisioning → no hotspot, OLED never progresses.
+      Fix: restart ONLY services NOT ordered after first-boot (sshd + the web
+      server), or use `--no-block`.
+    - **(iii) The captive portal can't bind :80 because the web server holds it.**
+      The portal needs `AP_IP:80`; nginx/kvmd-nginx listens on `0.0.0.0:80`. The
+      portal dies with "Address already in use", provisioning tears the AP down,
+      and the user stares at "join hotspot" for a hotspot that's gone. LATENT: it
+      only appears once the web server actually starts (bug i's fix un-hid it).
+      Fix: stop the web server for the duration of provisioning, restore it after
+      (on the failure path too). Verify `mb-portal.sh` vs kvmd-nginx.
+    - **(iv) A stuck unit is undiagnosable — write a report to the FAT boot
+      partition.** A unit with no WiFi and no working hotspot is unreachable, and
+      its ext4/root logs can't be read on Windows/macOS (`wsl --mount` refuses
+      removable SD readers). DIY now mirrors a plain-text report (who holds :80,
+      is hostapd running, portal exit, log tails) to `/boot/firmware/*.txt`, which
+      any OS reads. PiKVM's boot partition is `PIBOOT` (FAT) — do the same.
+25. **Base = repo HEAD, not a raw golden snapshot** `[PORT-concept]` — DIY's
+    `build-image.sh` deploys the FULL repo HEAD into the image and syncs the baked
+    git clone to `origin/main`, so a fresh unit reports "up to date" (not a
+    day-one N-commit full reinstall) and the web updater is only ever used for
+    FUTURE releases. It also strips `wtmp`/`btmp`/`lastlog` (the golden unit's
+    login/reboot history otherwise ships and cross-links units). Adapt to
+    `align_pi.py`.
+    **→ PiKVM 2026-07-20 (`4ad13ba`):** DONE. build-image now `git fetch origin
+    main + reset --hard + clean` on the baked `/opt/magicbridge` before arming, so
+    the image ships at clean origin/main HEAD — a fresh unit reports up-to-date, and
+    the sync also pulls every committed fix in cleanly (no more hand-patching the
+    image). `wtmp/btmp/lastlog` N/A here (`/var/log` is tmpfs — verified empty on
+    disk) but stripped defensively. `--verify` asserts a clean tree + no login
+    history. Confirmed on the real `dist.img`: baked tree bf64f3f+7-dirty -> clean
+    HEAD, 25/25 checks pass.
+
+---
+
+## → PiKVM resolution of item 24 (2026-07-20, `4c728d1`)
+- **24-i (fresh flash SSH+web dead): ALREADY SAFE.** `mb-firstboot` is
+  `Before=sysinit.target`, so it regenerates SSH keys + TLS *before* sshd/kvmd-nginx
+  (multi-user) start; TLS regen is unconditional (`bf64f3f`). **Proven live:** the
+  freshly-flashed unit this session came up with SSH + web login = 200. Added a
+  deadlock-safe belt: `mb-firstboot-late` (post-boot) restarts sshd/kvmd-nginx only
+  if `is-failed`.
+- **24-ii (restart deadlocks first-boot): ALREADY SAFE.** grep proves ZERO
+  `systemctl restart/start` anywhere in the first-boot chain. The 24-i recovery is
+  in the POST-boot unit, never inside mb-firstboot, so it cannot deadlock.
+- **24-iii (portal can't bind :80): SAFE BY DESIGN.** `mb-portal` binds
+  `AP_IP:8080` and DNATs `:80/:443` in `PREROUTING` — kvmd-nginx holding `:80` is
+  irrelevant (no bind conflict). **Proven live:** `http://192.168.73.1` worked
+  repeatedly this session.
+- **24-iv (stuck unit undiagnosable): REAL GAP → FIXED.** New `mb-boot-report.sh`
+  writes a plain-text report to the FAT `PIBOOT` partition (readable on any OS from
+  a card reader): first-boot marker, hostapd/portal state, who holds :80/:443, DNAT
+  rules, service states, error tail — no secrets. Hooked from `mb-firstboot` and
+  `mb-portal` (each time the hotspot comes up). This is exactly the visibility we
+  lacked when a looping unit was unreachable this session.
+- ⏳ Pending-device (unit offline): confirm the report file actually lands on
+  PIBOOT on a real stuck unit, and that a fresh flash reports up-to-date.
 
 ---
 
 ## Session commits (DIY repo `magicbridge-diy`, for reference)
 ```
+3195250 feat(image): base = repo HEAD (full deploy + repo sync) + wtmp strip     (item 25)
+b0e7d98 feat(provision): Windows-readable setup report on the FAT boot partition (item 24-iv)
+7f279fe fix(wifi): captive portal never bound :80 - nginx held it, AP torn down  (item 24-iii)
+507de5c fix(image): service-restart fix deadlocked first-boot - restart ssh+nginx (item 24-ii)
+dc0e5a1 fix(image): fresh flash left SSH+web DOWN - restart services after reset  (item 24-i)
+0e26b57 feat(oled): animated first-boot journey (setup->personalize->wifi->ready) (item 18/19)
+036b3b7 feat(image): zero+shrink+xz pipeline, --verify, boot/first-boot hardening (item 20)
 1865fcf feat(image): ship video.mode=auto so flashed units detect capture hw   (item 20)
 d9fe895 feat(video): auto-detect C790/CSI vs USB capture, default to C790       (item 8b)
 94889c1 feat(image): strip spoofed-MAC identity when arming an image            (item 20)

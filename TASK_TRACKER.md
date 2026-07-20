@@ -132,6 +132,27 @@
   MSD size on the first flashed card; if it did not grow, the unit still works fine
   (root is a separate partition) and only virtual-media capacity is affected.
 
+### 🔁 DIY imaging sync — first-boot bug audit + repo-HEAD base (handoff 24/25, 2026-07-20)
+Device was OFFLINE (flashed unit not on the LAN) → prepared + committed, on-hardware confirm pending.
+- **24-i SSH/web dead on fresh flash → ALREADY SAFE** (`4c728d1`): mb-firstboot is
+  Before=sysinit.target so keys/TLS regen before sshd/kvmd-nginx start; TLS regen already
+  unconditional. Proven live this session (.171 came up with SSH + web 200). Added a
+  deadlock-safe post-boot restart-if-failed in mb-firstboot-late.
+- **24-ii restart deadlock → ALREADY SAFE**: zero systemctl restart in the boot chain.
+- **24-iii portal :80 bind → SAFE BY DESIGN**: portal binds :8080 + DNATs :80/:443
+  (PREROUTING). Proven live: http://192.168.73.1 worked all session.
+- **24-iv stuck unit undiagnosable → FIXED** (`4c728d1`): new mb-boot-report.sh writes a
+  Windows/macOS-readable report to the FAT PIBOOT partition (first-boot marker, hostapd/
+  portal state, :80 holder, DNAT, services, errors — no secrets). Hooked from mb-firstboot
+  + mb-portal. Exactly the visibility we lacked when the loop struck this session.
+- **25 base = clean repo HEAD → DONE** (`4ad13ba`): build-image git-fetch+reset+clean syncs
+  the baked /opt/magicbridge to origin/main HEAD before arming → fresh unit reports
+  up-to-date (not a day-one reinstall) AND pulls all fixes in cleanly (no hand-patching).
+  wtmp/btmp/lastlog N/A (/var/log tmpfs) but stripped defensively. Applied to dist.img:
+  bf64f3f+7-dirty → clean HEAD; --verify now 25 checks, all pass.
+- ⏳ Pending-device: confirm the PIBOOT report lands on a real stuck unit; confirm fresh
+  flash reports up-to-date.
+
 ### 🛡️ FRESH-FLASH NOW SELF-COMPLETING + BULLETPROOF (mb-firstboot-late, 2026-07-20)
 Made a fresh flash finish itself with zero manual steps, and immune to the 3 bugs above.
 - **New post-boot oneshot `mb-firstboot-late.service`** (`6cde694`): (1) grows MSD to fill

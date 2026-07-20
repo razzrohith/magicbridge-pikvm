@@ -272,7 +272,7 @@ LUKS** (verified), so that DIY step is skipped. Building this surfaced three lat
 bugs that would each have broken a flashed unit — an uninstalled
 `mb-firstboot.service` (no personalization → shared identity), conditional TLS regen
 (no cert → dead `kvmd-nginx`), and unreset `ipmipasswd`/`vncpasswd` (stock `admin`
-shipped). All fixed. See `docs/IMAGING.md` + `TASK_TRACKER.md`.
+shipped). All fixed. See `docs/IMAGING.md` + `TASK_TRACKER.md`. **DIY imaging sync (item 24/25, 2026-07-20):** cross-checked DIY's 4 hardware-only first-boot bugs — 3 already safe on kvmd (first-boot runs Before=sysinit so keys/TLS exist before sshd/kvmd-nginx; no service restarts in the boot chain; portal DNATs :80 rather than binding it — all proven live this session), and the 4th (undiagnosable stuck unit) fixed with mb-boot-report.sh writing a plain-text report to the FAT PIBOOT partition. Image now also ships at clean origin/main HEAD (reports up-to-date, no day-one reinstall).
 
 ---
 
