@@ -65,6 +65,13 @@ for svc in sshd kvmd-nginx; do
     fi
 done
 
+# 2c. Brute-force rate-limit the main kvmd web login (nginx). Self-validating +
+#     self-reverting, so it can never take the web UI down. Post-boot only.
+if [ -f "$ROOT/provision/mb-nginx-ratelimit.sh" ]; then
+    echo "applying login rate-limit"
+    bash "$ROOT/provision/mb-nginx-ratelimit.sh"
+fi
+
 # 3. Mark done — force rw first (same lesson as mb-firstboot: mb-anon-defaults /
 #    the EDID block above may have left the rootfs read-only, and a silent RO
 #    write here would make this re-run every boot and re-randomize the EDID).

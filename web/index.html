@@ -1381,21 +1381,9 @@ function onLoad(){
   document.getElementById('bv-stream').textContent='Live';
   document.getElementById('s-stream').textContent='Live';
   document.getElementById('s-stream').className='sv ok';
-  // Best-effort real video FPS. "Ping" above only measures the tiny WebSocket
-  // control channel round-trip (keyboard/mouse) - it says nothing about the
-  // video. Some browsers re-fire `load` on every multipart MJPEG part; where
-  // that happens this gives an honest "frames actually rendered per second"
-  // number instead. If it never updates in your browser, the control ping
-  // above is still accurate for input latency, just not for video.
-  const now=performance.now();
-  _frameLoadTimes.push(now);
-  if(_frameLoadTimes.length>12) _frameLoadTimes.shift();
-  if(_frameLoadTimes.length>=4){
-    const span=_frameLoadTimes[_frameLoadTimes.length-1]-_frameLoadTimes[0];
-    const fps=span>0?((_frameLoadTimes.length-1)*1000/span):0;
-    const el=document.getElementById('s-vfps');
-    if(el) el.textContent=fps.toFixed(1)+' fps';
-  }
+  // Video FPS is read from kvmd's own stream counters in refreshStatus() now —
+  // reliable across browsers. The old per-<img>-load estimate lived here, but
+  // Chrome never re-fires `load` for multipart MJPEG, so it read "—".
 }
 function onErr(){
   if(typeof _activeTransport!=='undefined' && _activeTransport==='h264') return;
@@ -2164,6 +2152,15 @@ async function refreshStatus(){
     d.local_ip=(ir.meta&&ir.meta.server&&ir.meta.server.host)||location.hostname;
     const sr=(str&&(str.result||str))||{}, st=sr.streamer||sr;
     d.stream={ device:'capture', running:!!(st.stream), mode:(_activeTransport==='h264'?'h264':'mjpeg') };
+    // Real video FPS from kvmd's OWN counters (polled every 5s). Reliable in every
+    // browser, unlike the per-frame <img> onload trick which Chrome never fires for
+    // multipart MJPEG (that was why this read "—"). Prefer delivered (queued) fps,
+    // fall back to the capture source fps; show "—" only when the streamer is off.
+    const _strm=st&&st.stream, _ssrc=st&&st.source, _running=!!(_strm||_ssrc);
+    const _vfps=(_strm&&_strm.queued_fps!=null)?_strm.queued_fps
+              :((_ssrc&&_ssrc.captured_fps!=null)?_ssrc.captured_fps:null);
+    const _vel=document.getElementById('s-vfps');
+    if(_vel) _vel.textContent=(_vfps!=null)?(_vfps+' fps'):(_running?'0 fps':'—');
     const hr=(hid&&(hid.result||hid))||{}; const hon=hr.online;
     d.hid_kb=(hon!=null)?!!hon:null; d.hid_ms=(hon!=null)?!!hon:null;
     if(cl&&cl.clients){ d.viewers=cl.clients.map(c=>({ip:c.ip,ua:c.hostname||'',secs:0})); d.clients=cl.count||cl.clients.length; }

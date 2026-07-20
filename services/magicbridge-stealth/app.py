@@ -85,13 +85,21 @@ def _fs(mode: str):
     _sh("bash", "-c", "command -v rw >/dev/null && %s || mount -o remount,%s /" %
         (mode, "rw" if mode == "rw" else "ro"))
 
-def write_otg_override(ident: dict) -> None:
+def write_otg_override(ident: dict, hide_msd: bool = False) -> None:
     """Write our OTG override snippet (rw window kept as small as possible).
 
     Always emits a REALISTIC serial. kvmd's built-in default is the string
     "CAFEBABE" (a well-known magic number) whenever the serial is absent/empty —
     an obvious "this is a fake gadget" tell — so we never leave it unset. Mutates
     ident['serial'] in place so the caller persists the value it actually applied.
+
+    hide_msd (safe-mode): remove the USB mass-storage function from the gadget. A
+    real Logitech USB Receiver has NO mass-storage interface, so presenting one
+    (kvmd's virtual media) is the single remaining "this isn't a real receiver"
+    tell to a curious target. With it hidden the gadget is a pure keyboard+mouse
+    receiver. Trade-off: virtual media (mounting an ISO to the target) is
+    unavailable until safe-mode is turned back off. Disabling the MSD gadget
+    function is the documented kvmd way (`otg.devices.msd.default.enabled: false`).
     """
     serial = str(ident.get("serial") or "").strip()
     if not serial or serial.upper() == "CAFEBABE":
@@ -105,12 +113,24 @@ def write_otg_override(ident: dict) -> None:
         f"    product: \"{ident['product']}\"\n"
         f"    serial: \"{serial}\"\n"
     )
+    if hide_msd:
+        body += (
+            "    devices:\n"
+            "        msd:\n"
+            "            default:\n"
+            "                enabled: false\n"
+        )
     _fs("rw")
     try:
         OTG_OVERRIDE.parent.mkdir(parents=True, exist_ok=True)
         OTG_OVERRIDE.write_text(body)
     finally:
         _fs("ro")
+
+
+def _hide_msd() -> bool:
+    """Single source of truth: hide the MSD interface whenever safe-mode is on."""
+    return bool(current_identity().get("safe_mode", False))
 
 _GADGET = "/sys/kernel/config/usb_gadget/kvmd"
 _OTG_TEARDOWN = (
@@ -169,9 +189,42 @@ def _locked_response():
 async def lock_status(_):
     return web.json_response({"ok": True, "password_set": bool(_pw_cfg().get("hash"))})
 
+# ---- brute-force lockout for the stealth gate ----------------------------
+# Per-IP failed-attempt tracking with escalating temporary lockout. In-memory
+# (resets on service restart, which is fine — an attacker can't restart it), so
+# no disk writes on the read-only rootfs. nginx sets X-Real-IP for us.
+_UNLOCK_FAILS: dict = {}          # ip -> [fail_count, locked_until_epoch]
+_LOCK_AFTER = 5                   # free attempts before lockout kicks in
+_LOCK_MAX = 900                   # cap a single lockout at 15 min
+
+def _client_ip(request: web.Request) -> str:
+    return request.headers.get("X-Real-IP") or (request.remote or "?")
+
 async def unlock(request: web.Request):
-    body = await request.json()
-    return web.json_response({"ok": _check_pw(body)})
+    ip = _client_ip(request)
+    now = time.time()
+    fc, until = _UNLOCK_FAILS.get(ip, (0, 0.0))
+    if now < until:
+        wait = int(until - now)
+        return web.json_response({"ok": False, "locked_out": True, "retry_after": wait,
+                                  "error": f"too many attempts — locked for {wait}s"}, status=429)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if _check_pw(body):
+        _UNLOCK_FAILS.pop(ip, None)          # success clears the record
+        return web.json_response({"ok": True})
+    fc += 1
+    lock = 0
+    if fc >= _LOCK_AFTER:                     # 15s, 30s, 60s, … doubling, capped
+        lock = min(_LOCK_MAX, 15 * (2 ** (fc - _LOCK_AFTER)))
+    _UNLOCK_FAILS[ip] = (fc, now + lock)
+    resp = {"ok": False, "attempts": fc}
+    if lock:
+        resp.update(locked_out=True, retry_after=int(lock),
+                    error=f"too many attempts — locked for {int(lock)}s")
+    return web.json_response(resp, status=(429 if lock else 200))
 
 async def set_password(request: web.Request):
     body = await request.json()
@@ -228,7 +281,7 @@ async def set_identity(request: web.Request):
 
     loop = asyncio.get_running_loop()
     try:
-        await loop.run_in_executor(None, write_otg_override, ident)
+        await loop.run_in_executor(None, write_otg_override, ident, ident.get("safe_mode", False))
         ok, out = await loop.run_in_executor(None, rebuild_gadget)
     except Exception as e:
         return web.json_response({"ok": False, "error": f"gadget apply failed: {e}"}, status=200)
@@ -245,7 +298,7 @@ async def random_serial(request: web.Request):
     cur = current_identity(); cur["serial"] = rand_serial()
     loop = asyncio.get_running_loop()
     try:
-        await loop.run_in_executor(None, write_otg_override, cur)
+        await loop.run_in_executor(None, write_otg_override, cur, cur.get("safe_mode", False))
         ok, out = await loop.run_in_executor(None, rebuild_gadget)
     except Exception as e:
         return web.json_response({"ok": False, "error": f"gadget apply failed: {e}"}, status=200)
@@ -276,7 +329,7 @@ async def randomize(request: web.Request):
     }
     loop = asyncio.get_running_loop()
     try:
-        await loop.run_in_executor(None, write_otg_override, ident)
+        await loop.run_in_executor(None, write_otg_override, ident, ident.get("safe_mode", False))
         ok, out = await loop.run_in_executor(None, rebuild_gadget)
     except Exception as e:
         return web.json_response({"ok": False, "error": f"gadget apply failed: {e}"}, status=200)
@@ -305,15 +358,30 @@ async def restore(request: web.Request):
 
 
 async def safe_mode(request: web.Request):
+    """POST /mb/stealth/safe-mode {on} — minimise the exposed USB gadget.
+
+    ON removes the mass-storage interface so the target sees a pure keyboard+mouse
+    receiver (a real Logitech USB Receiver has no mass storage — this closes that
+    tell). Applies LIVE by rewriting the OTG override + rebuilding the gadget.
+    Trade-off, surfaced to the caller: virtual media is unavailable while ON.
+    """
     body = await request.json()
     if not _check_pw(body):
         return _locked_response()
-    cur = current_identity(); cur["safe_mode"] = bool(body.get("on"))
-    # TODO(hw): when on, disable non-essential gadget functions (aux HID, MSD) via
-    # override; verify against kvmd's function set on-device.
+    on = bool(body.get("on"))
+    cur = current_identity(); cur["safe_mode"] = on
+    loop = asyncio.get_running_loop()
+    try:
+        await loop.run_in_executor(None, write_otg_override, cur, on)
+        ok, out = await loop.run_in_executor(None, rebuild_gadget)
+    except Exception as e:
+        return web.json_response({"ok": False, "error": f"gadget apply failed: {e}"}, status=200)
     save_config("stealth", cur)
-    return web.json_response({"ok": True, "safe_mode": cur["safe_mode"],
-                              "note": "preference saved; live interface trimming not yet implemented"})
+    return web.json_response({
+        "ok": ok, "safe_mode": on,
+        "note": ("MSD interface hidden — virtual media is off until safe-mode is disabled"
+                 if on else "MSD interface restored — virtual media available"),
+        "detail": out[:500]})
 
 async def status(_):
     rc, out = _sh("systemctl", "is-active", "kvmd-otg")

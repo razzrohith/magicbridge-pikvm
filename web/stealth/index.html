@@ -431,7 +431,7 @@ async function gateUnlock(){
   const pw=$("#gatePw").value;const err=$("#gateErr");
   const r=await jpost(MB+"/stealth/unlock",{password:pw});
   if(r&&r.ok){STEALTH_PW=pw;err.classList.remove("show");revealPanel();}
-  else{err.textContent="Incorrect password.";err.classList.add("show");$("#gatePw").value="";$("#gatePw").focus();}
+  else{err.textContent=(r&&r.error)?r.error:"Incorrect password.";err.classList.add("show");$("#gatePw").value="";$("#gatePw").focus();}
 }
 async function setStealthPw(){const nw=$("#pwNew").value;if(nw.length<4)return toast("Password too short (min 4)","bad");
   const r=await jpost(MB+"/stealth/password",{password:nw,current:STEALTH_PW});
