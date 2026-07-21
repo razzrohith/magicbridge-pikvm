@@ -98,8 +98,11 @@ def write_otg_override(ident: dict, hide_msd: bool = False) -> None:
     (kvmd's virtual media) is the single remaining "this isn't a real receiver"
     tell to a curious target. With it hidden the gadget is a pure keyboard+mouse
     receiver. Trade-off: virtual media (mounting an ISO to the target) is
-    unavailable until safe-mode is turned back off. Disabling the MSD gadget
-    function is the documented kvmd way (`otg.devices.msd.default.enabled: false`).
+    unavailable until safe-mode is turned back off. kvmd builds the mass-storage
+    function ONLY when `kvmd.msd.type == "otg"` (see kvmd/apps/otg: `if
+    config.kvmd.msd.type == "otg"`), so setting it to "disabled" is what actually
+    drops the interface — verified on-device that the earlier
+    `otg.devices.msd.default.enabled` key was silently ignored.
     """
     serial = str(ident.get("serial") or "").strip()
     if not serial or serial.upper() == "CAFEBABE":
@@ -114,11 +117,12 @@ def write_otg_override(ident: dict, hide_msd: bool = False) -> None:
         f"    serial: \"{serial}\"\n"
     )
     if hide_msd:
+        # Top-level kvmd: section (NOT under otg:). kvmd-otg only adds the
+        # mass_storage function when kvmd.msd.type == "otg"; "disabled" drops it.
         body += (
-            "    devices:\n"
-            "        msd:\n"
-            "            default:\n"
-            "                enabled: false\n"
+            "kvmd:\n"
+            "    msd:\n"
+            "        type: disabled\n"
         )
     _fs("rw")
     try:
