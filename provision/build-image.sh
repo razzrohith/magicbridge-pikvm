@@ -186,6 +186,11 @@ if [[ "$MODE" == "verify" ]]; then
     git config --global --add safe.directory "$R/opt/magicbridge" 2>/dev/null || true
     chk "baked repo tree is CLEAN (item 25: up-to-date)" '[[ -z "$(git -C "$R/opt/magicbridge" status --short 2>/dev/null)" ]]'
     chk "no wtmp/btmp login history shipped"          '! ls "$R"/var/log/wtmp "$R"/var/log/btmp >/dev/null 2>&1'
+    # item 27: assert the specific VALUES that matter, not just "file exists" —
+    # every installed unit must byte-match the repo, and the fixes must be present.
+    chk "installed units all match repo (no stale .service)" 'for u in "$R"/opt/magicbridge/systemd/*.service; do cmp -s "$u" "$R/etc/systemd/system/$(basename "$u")" || exit 1; done'
+    chk "mb-portal timeout NOT capped (26e: no mid-setup kill)" 'grep -qE "TimeoutStartSec=(infinity|0)\b" "$R/etc/systemd/system/mb-portal.service"'
+    chk "wifi save REPLACES bad creds (26b: no stranding)" 'grep -q "REPLACE, never blind-append" "$R/opt/magicbridge/provision/mb-portal.sh"'
     if [[ -n "$MSDPART" ]]; then
         mount "$MSDPART" "$MNT/msd" 2>/dev/null || true
         chk "MSD has no uploaded images" '[[ -z "$(find "$MNT/msd" -maxdepth 1 -type f ! -name ".*" 2>/dev/null)" ]]'
@@ -219,6 +224,20 @@ if git -C "$R/opt/magicbridge" rev-parse >/dev/null 2>&1; then
     ok "baked repo at clean HEAD $(git -C "$R/opt/magicbridge" rev-parse --short HEAD 2>/dev/null) (fresh unit reports up-to-date)"
 else
     warn "no git tree at /opt/magicbridge in the image - skipping repo-HEAD sync"
+fi
+# ITEM 27: re-deploy EVERY unit file from the (now-HEAD) repo, overwriting stale
+# installed copies. The image is snapshotted from a golden unit whose
+# /etc/systemd/system units are frozen at INSTALL time — a later fix to a .service
+# (e.g. mb-portal's TimeoutStartSec) lands in /opt/magicbridge but NOT in the
+# installed unit, so half a fix ships. Proven: the built image carried
+# mb-portal.service with the OLD 1200s timeout while the repo had infinity.
+if [[ -d "$R/opt/magicbridge/systemd" ]]; then
+    _n=0
+    for u in "$R/opt/magicbridge/systemd"/*.service; do
+        [[ -e "$u" ]] || continue
+        install -Dm644 "$u" "$R/etc/systemd/system/$(basename "$u")"; _n=$((_n+1))
+    done
+    ok "re-deployed all $_n repo unit files (item 27: no stale .service ships)"
 fi
 # wtmp/btmp/lastlog: on PiKVM /var/log is tmpfs so these never persist to the card,
 # but strip any on-disk copies defensively (login/reboot history cross-links units).
