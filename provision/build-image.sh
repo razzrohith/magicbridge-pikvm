@@ -239,6 +239,13 @@ if [[ -d "$R/opt/magicbridge/systemd" ]]; then
     done
     ok "re-deployed all $_n repo unit files (item 27: no stale .service ships)"
 fi
+# ITEM 31: stamp the fully-deployed commit so a freshly-flashed unit reports
+# "up to date" (repo + units above ARE fully deployed here) instead of the
+# "deployment unverified -> reinstall" the updater shows when the stamp is absent.
+if _bh="$(git -C "$R/opt/magicbridge" rev-parse HEAD 2>/dev/null)"; then
+    printf '%s\n' "$_bh" > "$R/opt/magicbridge/.mb-deployed"
+    ok "deploy stamp baked: ${_bh:0:7} (fresh unit reports up-to-date)"
+fi
 # wtmp/btmp/lastlog: on PiKVM /var/log is tmpfs so these never persist to the card,
 # but strip any on-disk copies defensively (login/reboot history cross-links units).
 rm -f "$R"/var/log/wtmp* "$R"/var/log/btmp* "$R"/var/log/lastlog 2>/dev/null || true

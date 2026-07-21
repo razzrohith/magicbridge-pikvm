@@ -6,6 +6,8 @@ __pycache__/
 venv/
 
 # Secrets / runtime (never commit)
+.mb-deployed
+.mb-deployed.tmp
 *.secret
 *.key
 *.pem

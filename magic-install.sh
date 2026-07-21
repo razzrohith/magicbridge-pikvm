@@ -271,6 +271,23 @@ phase_check() {
 }
 
 # =====================================================================
+#  item 31 — stamp the fully-deployed commit (success-only, last real step).
+#  The web updater compares THIS to origin, never the clone HEAD, so an update
+#  interrupted after `git reset` but before deploy can never look "up to date".
+# =====================================================================
+stamp_deployed() {
+  [ "$DRY_RUN" = 1 ] && return 0
+  local sha; sha="$(git -C "$INSTALL_ROOT" rev-parse HEAD 2>/dev/null)"
+  [ -n "$sha" ] || { warn "no git HEAD — skipping deploy stamp"; return 0; }
+  if printf '%s\n' "$sha" > "$INSTALL_ROOT/.mb-deployed.tmp" 2>/dev/null; then
+    mv -f "$INSTALL_ROOT/.mb-deployed.tmp" "$INSTALL_ROOT/.mb-deployed" 2>/dev/null \
+      && ok "deploy stamp: ${sha:0:7}" || warn "deploy stamp move failed"
+  else
+    warn "deploy stamp write failed (rootfs ro?)"
+  fi
+}
+
+# =====================================================================
 main() {
   banner
   phase0_preflight
@@ -281,6 +298,7 @@ main() {
   phase4_services
   phase5_wire
   phase6_enable
+  stamp_deployed        # item 31: record the commit we FULLY deployed, as the last step
   fs_ro
   echo
   ok "MagicBridge install complete."

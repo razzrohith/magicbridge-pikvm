@@ -482,27 +482,45 @@ async def wifi_scan(_):
 
 
 async def update_check(_):
-    """GET /mb/net/update — how many MagicBridge GIT commits are pending. The
-    Apply pulls git (fetch+reset), so the check is git-based too (a pacman check
-    would never see our commits). Classifies the pull as incremental (fast) vs
-    full (structural files changed), matching align_pi's logic."""
+    """GET /mb/net/update — how many commits behind the DEPLOYED state we are. Compares
+    the item-31 deployed-commit STAMP (not the clone HEAD) to origin, so a unit that
+    pulled but never finished deploying is never reported 'up to date'. Classifies the
+    pending diff as incremental (fast) vs full (structural files changed)."""
     # git fetch writes .git/FETCH_HEAD, which is on the read-only rootfs.
     _rw()
     sh("bash", "-c", "git config --global --add safe.directory /opt/magicbridge; "
        "cd /opt/magicbridge && git fetch origin main 2>&1", timeout=30)
     _ro()
-    _rc, behind = sh("bash", "-c", "cd /opt/magicbridge && git rev-list --count HEAD..origin/main 2>/dev/null")
-    n = int(behind.strip()) if behind.strip().isdigit() else 0
     _rc, cur = sh("bash", "-c", "git -C /opt/magicbridge rev-parse --short HEAD 2>/dev/null")
-    _rc, changed = sh("bash", "-c", "cd /opt/magicbridge && git diff --name-only HEAD..origin/main 2>/dev/null | wc -l")
+    _rc, origin = sh("bash", "-c", "git -C /opt/magicbridge rev-parse origin/main 2>/dev/null")
+    base = _read_stamp()   # what is actually DEPLOYED, not what the clone sits at
+    if not base:
+        # Nothing ever proved fully deployed → force a (re)install rather than risk a
+        # fake up-to-date state (item 31).
+        return web.json_response({"ok": True, "updates": 1, "update_available": True,
+                                  "commits_behind": 0, "changed": 0, "mode": "full",
+                                  "version": cur.strip(), "deployed": None, "branch": "main",
+                                  "unverified": True,
+                                  "detail": "deployment unverified → reinstall"})
+    _rc, behind = sh("bash", "-c", "cd /opt/magicbridge && git rev-list --count %s..origin/main 2>/dev/null" % base)
+    n = int(behind.strip()) if behind.strip().isdigit() else 0
+    if n == 0:
+        # Diverged (force-push/rebase): the stamp isn't an ancestor of origin, so the
+        # count is 0 yet the two differ — still an update the unit needs.
+        _rc, anc = sh("bash", "-c", "cd /opt/magicbridge && git merge-base --is-ancestor %s origin/main 2>/dev/null && echo yes || echo no" % base)
+        _rc, sfull = sh("bash", "-c", "git -C /opt/magicbridge rev-parse %s 2>/dev/null" % base)
+        if anc.strip() != "yes" and sfull.strip() and origin.strip() and sfull.strip() != origin.strip():
+            n = 1
+    _rc, changed = sh("bash", "-c", "cd /opt/magicbridge && git diff --name-only %s..origin/main 2>/dev/null | wc -l" % base)
     nchanged = int(changed.strip()) if changed.strip().isdigit() else 0
-    _rc, struct = sh("bash", "-c", "cd /opt/magicbridge && git diff --name-only HEAD..origin/main 2>/dev/null "
-                     "| grep -cE '^(systemd/|nginx/|magic-install.sh|kvmd-overrides/)'")
+    _rc, struct = sh("bash", "-c", "cd /opt/magicbridge && git diff --name-only %s..origin/main 2>/dev/null "
+                     "| grep -cE '^(systemd/|nginx/|magic-install.sh|kvmd-overrides/)'" % base)
     is_struct = struct.strip().isdigit() and int(struct.strip()) > 0
     return web.json_response({"ok": True, "updates": n, "update_available": n > 0,
                               "commits_behind": n, "changed": nchanged,
                               "mode": ("full" if is_struct else "incremental"),
-                              "version": cur.strip(), "branch": "main",
+                              "version": cur.strip(), "deployed": base[:7], "branch": "main",
+                              "unverified": False,
                               "detail": ("%d update%s available" % (n, "" if n == 1 else "s")) if n else "up to date"})
 
 
@@ -527,6 +545,65 @@ def _ro():
     # symmetric with _rw() and mbcommon._fs (bug F — the old `|| true` could leave
     # the rootfs writable on any build without the helper).
     sh("bash", "-c", "command -v ro >/dev/null && ro || mount -o remount,ro /")
+
+
+# ---- deployed-commit stamp (item 31) --------------------------------
+# The web updater used to compare the git CLONE's HEAD to origin. A shutdown that
+# landed mid-apply — after `git reset` had already advanced HEAD but before the
+# deploy/restart finished — left HEAD == origin, so the check reported "up to date"
+# while the unit ran OLD code, with no way to retry from the UI. Fix: the apply
+# STAMPS the commit it fully deployed as its last success-only step, and the check
+# compares THAT, never HEAD. A missing/garbage stamp forces "deployment unverified
+# → reinstall", so a unit can never be trapped in a fake up-to-date state.
+DEPLOY_STAMP = "/opt/magicbridge/.mb-deployed"
+
+
+def _head_sha():
+    _rc, sha = sh("bash", "-c", "git -C /opt/magicbridge rev-parse HEAD 2>/dev/null")
+    return sha.strip()
+
+
+def _read_stamp():
+    """Return the fully-deployed commit SHA, or "" if the stamp is missing/garbage or
+    points at a commit this clone doesn't have."""
+    try:
+        with open(DEPLOY_STAMP) as f:
+            s = f.read().strip()
+    except Exception:
+        return ""
+    if not re.fullmatch(r"[0-9a-f]{7,40}", s or ""):
+        return ""
+    _rc, ok = sh("bash", "-c", "git -C /opt/magicbridge cat-file -e %s^{commit} 2>/dev/null && echo ok" % s)
+    return s if "ok" in ok else ""
+
+
+def _write_stamp(sha):
+    """Record the fully-deployed commit atomically. Success-only, LAST deploy step.
+    Written inside the _rw() window; lives on the SD rootfs so it survives a reboot."""
+    if not sha:
+        return
+    tmp = DEPLOY_STAMP + ".tmp"
+    try:
+        with open(tmp, "w") as f:
+            f.write(sha + "\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, DEPLOY_STAMP)
+    except Exception as e:
+        log.warning("deploy stamp write failed: %s", e)
+
+
+def _deploy_structural():
+    """Install the structural bits (systemd units, nginx block, kvmd override) that a
+    plain `git reset` drops onto disk but never activates — mirrors magic-install
+    phase4/5 and build-image's self-heal. Idempotent; only called when structural
+    files actually changed, so the item-31 stamp can honestly claim 'deployed'."""
+    sh("bash", "-c",
+       'set -e; R=/opt/magicbridge; '
+       'for u in "$R"/systemd/*.service; do [ -e "$u" ] && install -Dm644 "$u" "/etc/systemd/system/$(basename "$u")"; done; '
+       '[ -f "$R/nginx/magicbridge.conf" ] && install -Dm644 "$R/nginx/magicbridge.conf" /etc/kvmd/nginx/magicbridge.conf; '
+       '[ -f "$R/kvmd-overrides/override.d/00-magicbridge.yaml" ] && install -Dm644 "$R/kvmd-overrides/override.d/00-magicbridge.yaml" /etc/kvmd/override.d/00-magicbridge.yaml; '
+       'systemctl daemon-reload', timeout=60)
 
 
 # ---- EDID editor (kvmd-edidconf) -----------------------------------
@@ -801,12 +878,30 @@ async def update_apply(_):
         oled = subprocess.Popen(["/usr/local/bin/mb-oled-msg", "--updating"])  # OLED "Updating..." (handoff #19)
     except Exception:
         oled = None
+    prev = _read_stamp()          # what was fully deployed before this apply
+    rc, out, struct = 1, "", False
     _rw()
     try:
         rc, out = sh("bash", "-c",
                      "git config --global --add safe.directory /opt/magicbridge; "
                      "cd /opt/magicbridge && git fetch origin main 2>&1 && "
                      "git reset --hard origin/main 2>&1", timeout=90)
+        if rc == 0:
+            # Structural change since the last deploy? (systemd/nginx/kvmd-overrides
+            # land on disk via git reset but are NOT active until re-installed.)
+            if prev:
+                _rc, s = sh("bash", "-c",
+                            "cd /opt/magicbridge && git diff --name-only %s..HEAD 2>/dev/null "
+                            "| grep -cE '^(systemd/|nginx/|magic-install.sh|kvmd-overrides/)'" % prev)
+                struct = s.strip().isdigit() and int(s.strip()) > 0
+            else:
+                struct = True     # no known prior deploy → install structural bits to be safe
+            if struct:
+                _deploy_structural()
+            # STAMP as the LAST deploy step, success-only, while the rootfs is still rw.
+            # An apply interrupted before this point leaves the OLD stamp, so update_check
+            # keeps offering the update instead of falsely reporting up-to-date (item 31).
+            _write_stamp(_head_sha())
     finally:
         _ro()
     sh("systemctl", "reload", "kvmd-nginx", timeout=15)
@@ -830,7 +925,7 @@ async def update_apply(_):
     # Restart sidecars last; magicbridge-net restart ends this request.
     for svc in ("magicbridge-stealth", "magicbridge-agent", "magicbridge-net"):
         sh("systemctl", "restart", svc, timeout=15)
-    return web.json_response({"ok": rc == 0, "detail": out[-1500:]})
+    return web.json_response({"ok": rc == 0, "structural": struct, "detail": out[-1500:]})
 
 
 def build_app():
