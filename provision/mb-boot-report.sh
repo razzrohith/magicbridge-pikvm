@@ -46,6 +46,10 @@ boot_rw
   echo "wlan0 MAC  : $(cat /sys/class/net/wlan0/address 2>/dev/null)"
   echo "addresses  : $(ip -br addr 2>/dev/null | tr '\n' '|')"
   echo "default gw : $(ip route 2>/dev/null | grep '^default' | head -1)"
+  # Headless discovery (handoff 28): this unit has NO branded mDNS name by design
+  # (that would be a LAN tell), but avahi publishes its realistic per-unit hostname.
+  echo "REACH ME AT: https://$(hostname 2>/dev/null).local/   (unique per unit; or use the IP above)"
+  echo "avahi (mDNS): daemon=$(systemctl is-active avahi-daemon 2>/dev/null) socket=$(systemctl is-active avahi-daemon.socket 2>/dev/null)"
   echo "saved WiFi networks (count, NO passwords): $(grep -c 'ssid=' /etc/wpa_supplicant/wpa_supplicant-wlan0.conf 2>/dev/null)"
   echo "wpa_supplicant: $(systemctl is-active wpa_supplicant@wlan0 2>/dev/null)  networkd: $(systemctl is-active systemd-networkd 2>/dev/null)"
   echo
@@ -74,6 +78,22 @@ boot_rw
   lsblk -o NAME,SIZE,FSTYPE,MOUNTPOINT 2>/dev/null | grep -E 'mmcblk0|NAME'
   echo "rootfs mode: $(findmnt -no OPTIONS / 2>/dev/null | grep -o '^r[ow]')"
   echo
+  echo "--- POWER / UNDER-VOLTAGE (handoff 29) ---"
+  # A weak USB-C supply makes the Pi under-volt: USB devices (the HDMI capture!)
+  # enumerate, work, then VANISH from lsusb with /dev/videoN gone. That looks like
+  # a capture/driver bug but is really power. Surface it so it self-diagnoses.
+  if command -v vcgencmd >/dev/null 2>&1; then
+    _t=$(vcgencmd get_throttled 2>/dev/null)
+    echo "vcgencmd    : $_t"
+    case "$_t" in
+      *0x0) echo "power       : OK — no under-voltage or throttling flags" ;;
+      *throttled=0x*) echo "power       : ⚠ FLAGS SET — bit0=under-voltage now, bit16=under-voltage since boot. Use a real 5V/3A USB-C supply; a laptop port is NOT enough." ;;
+    esac
+  else
+    echo "vcgencmd    : (unavailable)"
+  fi
+  echo "capture dev : $(ls /dev/video0 /dev/kvmd-video 2>/dev/null | tr '\n' ' ' || echo 'GONE — if it worked earlier, this is a POWER problem, not capture code')"
+  echo
   echo "--- RECENT ERRORS (this boot) ---"
   journalctl -b -p err --no-pager 2>/dev/null | tail -n 20 || echo "(journal unavailable)"
   echo
@@ -85,6 +105,10 @@ boot_rw
   echo "   died; check the mb-portal log above."
   echo " * Something other than the portal on :80 with no DNAT rules -> the captive"
   echo "   portal cannot be reached."
+  echo " * Under-voltage flags set (POWER section) -> capture/network dropping out is"
+  echo "   a weak supply, NOT a bug. Use a proper 5V/3A USB-C supply."
+  echo " * '.local doesn't resolve' from your computer -> almost always a client-side"
+  echo "   VPN (NordVPN etc.) blocking LAN mDNS, not the unit. Disable it or use the IP."
   echo " Send this file to support / paste it to Claude."
   echo "==================================================================="
 } > "$OUT" 2>/dev/null

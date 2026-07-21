@@ -529,6 +529,10 @@ body:not(.fs) .fs-hud{display:none!important}
   <div class="stat-chip" id="chip-uptime" title="Device uptime">⏱ <span id="sv-uptime">-</span></div>
   <div class="stat-chip">🌡 <span id="sv-temp">-</span></div>
   <div class="stat-chip">⚡ <span id="sv-lat">-</span></div>
+  <!-- Under-voltage banner (handoff 29): hidden until it actually happens, then
+       ALWAYS visible on every tab. A weak USB-C supply makes the HDMI capture (and
+       network) drop out silently — this stops it becoming a capture-code hunt. -->
+  <div class="stat-chip" id="chip-power" title="Weak power supply — the Pi is under-volting. Use a real 5V/3A USB-C supply; a laptop port is not enough. Capture/network can drop out until fixed." style="display:none;background:rgba(244,63,94,.18);color:#ff5c82;border-color:rgba(244,63,94,.4);cursor:help">⚠ LOW POWER</div>
   <button class="tbtn icon" onclick="toggleFS()" title="Fullscreen">⛶</button>
   <button class="tbtn" id="set-btn" onclick="toggleSidebar()">⚙</button>
   <button class="tbtn icon" onclick="mbLogout()" title="Sign out">⏏</button>
@@ -2089,6 +2093,9 @@ function applyPowerHealth(d){
   }
   const powWarn=document.getElementById('ph-power-warn');
   if(powWarn) powWarn.style.display=(p.uv_now||p.throttled_now)?'inline-block':'none';
+  // Always-visible top-bar banner (handoff 29): show on ANY tab while under-volting.
+  const powChip=document.getElementById('chip-power');
+  if(powChip) powChip.style.display=(p.uv_now||p.throttled_now)?'inline-flex':'none';
 
   const tempTxt=document.getElementById('ph-temp-text');
   if(tempTxt) tempTxt.textContent=(d.temp_c!=null)?d.temp_c.toFixed(1)+'°C':'-';
