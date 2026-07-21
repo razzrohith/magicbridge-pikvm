@@ -1218,7 +1218,26 @@ body:not(.fs) .fs-hud{display:none!important}
 // Auth
 // ===== kvmd/sidecar fetch shim: DIY /api/* -> kvmd + /mb/* =====================
 (function(){
-  const _F=window.fetch.bind(window);
+  const _NF=window.fetch.bind(window);
+  // item 34: an expired session used to make EVERY control silently no-op — a 401
+  // was invisible, so buttons toasted success while nothing happened. ONE wrapper
+  // around the real fetch handles it for all call sites: on a 401 (except the auth
+  // endpoints, so a wrong password can't loop us), bounce to login exactly once.
+  let _authBounced=false;
+  const _F=async function(url,opts){
+    const r=await _NF(url,opts);
+    try{
+      if(r&&r.status===401){
+        const u=(typeof url==='string')?url:((url&&url.url)||'');
+        if(!_authBounced && !/\/api\/auth\//.test(u) && !/\/login(\/|$)/.test(u)){
+          _authBounced=true;
+          try{toast('Session expired — signing you back in…',3500);}catch(e){}
+          setTimeout(function(){location.href='/login/';},700);
+        }
+      }
+    }catch(e){}
+    return r;
+  };
   const KV=['/api/ws','/api/hid','/api/atx','/api/info','/api/streamer','/api/auth','/api/gpio','/api/msd'];
   const J=(o,s)=>new Response(JSON.stringify(o),{status:s||200,headers:{'Content-Type':'application/json'}});
   const g=async u=>{try{const r=await _F(u,{credentials:'include'});return await r.json();}catch(e){return null;}};
@@ -2207,8 +2226,15 @@ function takeScreenshot(){
 // Power
 async function piPower(a){
   if(!confirm(a==='shutdown'?'Shut down the Pi?':'Reboot the Pi?')) return;
+  // item 34: check the result — don't toast success before the request even goes out.
+  // A 401 (expired session) is caught centrally and bounces to login; here we only
+  // report an actual failure so a dead control can never look alive.
   toast(a==='shutdown'?'Shutting down…':'Rebooting…',5000);
-  await fetch('/api/power',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:a})});
+  try{
+    const r=await fetch('/api/power',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:a})});
+    const d=await r.json().catch(()=>({}));
+    if(d && d.ok===false) toast('Power command failed — check your session/connection',4000);
+  }catch(e){ toast('Power command failed — check your session/connection',4000); }
 }
 
 // Tailscale
