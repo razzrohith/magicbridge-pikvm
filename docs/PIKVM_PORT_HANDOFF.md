@@ -201,44 +201,91 @@ check PiKVM's own equivalent · **[PORT-concept]** take the idea, not the code.
     FUTURE releases. It also strips `wtmp`/`btmp`/`lastlog` (the golden unit's
     login/reboot history otherwise ships and cross-links units). Adapt to
     `align_pi.py`.
-    **→ PiKVM 2026-07-20 (`4ad13ba`):** DONE. build-image now `git fetch origin
-    main + reset --hard + clean` on the baked `/opt/magicbridge` before arming, so
-    the image ships at clean origin/main HEAD — a fresh unit reports up-to-date, and
-    the sync also pulls every committed fix in cleanly (no more hand-patching the
-    image). `wtmp/btmp/lastlog` N/A here (`/var/log` is tmpfs — verified empty on
-    disk) but stripped defensively. `--verify` asserts a clean tree + no login
-    history. Confirmed on the real `dist.img`: baked tree bf64f3f+7-dirty -> clean
-    HEAD, 25/25 checks pass.
 
----
-
-## → PiKVM resolution of item 24 (2026-07-20, `4c728d1`)
-- **24-i (fresh flash SSH+web dead): ALREADY SAFE.** `mb-firstboot` is
-  `Before=sysinit.target`, so it regenerates SSH keys + TLS *before* sshd/kvmd-nginx
-  (multi-user) start; TLS regen is unconditional (`bf64f3f`). **Proven live:** the
-  freshly-flashed unit this session came up with SSH + web login = 200. Added a
-  deadlock-safe belt: `mb-firstboot-late` (post-boot) restarts sshd/kvmd-nginx only
-  if `is-failed`.
-- **24-ii (restart deadlocks first-boot): ALREADY SAFE.** grep proves ZERO
-  `systemctl restart/start` anywhere in the first-boot chain. The 24-i recovery is
-  in the POST-boot unit, never inside mb-firstboot, so it cannot deadlock.
-- **24-iii (portal can't bind :80): SAFE BY DESIGN.** `mb-portal` binds
-  `AP_IP:8080` and DNATs `:80/:443` in `PREROUTING` — kvmd-nginx holding `:80` is
-  irrelevant (no bind conflict). **Proven live:** `http://192.168.73.1` worked
-  repeatedly this session.
-- **24-iv (stuck unit undiagnosable): REAL GAP → FIXED.** New `mb-boot-report.sh`
-  writes a plain-text report to the FAT `PIBOOT` partition (readable on any OS from
-  a card reader): first-boot marker, hostapd/portal state, who holds :80/:443, DNAT
-  rules, service states, error tail — no secrets. Hooked from `mb-firstboot` and
-  `mb-portal` (each time the hotspot comes up). This is exactly the visibility we
-  lacked when a looping unit was unreachable this session.
-- ⏳ Pending-device (unit offline): confirm the report file actually lands on
-  PIBOOT on a real stuck unit, and that a fresh flash reports up-to-date.
+26. **Wrong WiFi password STRANDED the unit (no wifi, no hotspot)** `[PORT — VERIFY hard]`
+    — found on a real fresh setup, and the nastiest UX bug of the lot. DIY's
+    provisioning did `nmcli connection up "$SSID" || true`, **never checked the
+    result**, announced "Connected!" on the OLED anyway, and had already torn the
+    AP down — so a mistyped password left the unit with **no WiFi and no hotspot,
+    recoverable only by power-cycling**. Fix: (a) VERIFY the connection actually
+    reached NM state `connected` (poll ~24s), (b) on failure DELETE the bad
+    profile so wrong creds are never kept, (c) **re-raise the setup hotspot**
+    (DIY re-execs the provisioning script) so the user just rejoins and retries,
+    (d) cap retries via an exported counter (4) then stop with a clear
+    power-cycle message, (e) raise the unit's `TimeoutStartSec` so a retry can't
+    be killed mid-flow. Check `mb-portal.sh`/kvmd's equivalent: **any** path that
+    tears down the AP before confirming the new connection has this bug.
+    **→ PiKVM 2026-07-20 (`4f1c420`): FIXED (b,d,e); a,c already-safe by design.**
+    Reproduced the core defect — `save_wifi` blind-APPENDED a network block, so a
+    mistyped PSK stayed in the conf forever and a retry left TWO blocks for one SSID
+    (wpa_supplicant can keep trying the bad one). (b) now REPLACES the SSID's block
+    before writing new creds — verified: wrong→retry = exactly 1 block, bad PSK gone,
+    other/open nets preserved. (e) `mb-portal.service` TimeoutStartSec 1200→infinity
+    (the cap SIGTERM'd the oneshot after 20 min and hostapd/dnsmasq in its cgroup
+    died with it → stranded; nothing is ordered After= it). (d) back-off guard so a
+    crashing portal (:8080 busy) can't tight-spin hostapd. (a,c) verify+re-raise is
+    inherent to our design: we save creds + reboot; the next boot polls ~40 s and
+    re-raises the hotspot if WiFi failed — the AP is never torn down before the new
+    connection is confirmed and "Connected" is never announced early. ⏳ on-hardware
+    wrong-PSK retry pending (device offline).
+27. **Stale unit files in the image silently undo script fixes** `[PORT]` — the
+    26 fix landed in the script, but the built image still carried the OLD
+    `.service` (with the short timeout) because the image builder only deployed
+    the *first-boot* unit files. Half the fix shipped. **Deploy EVERY unit file
+    from the repo when arming**, and add `--verify` assertions for the specific
+    values that matter (DIY now asserts the retry logic is present, the timeout
+    is raised, and the mDNS alias is set) so this fails the build instead of
+    shipping. Caught only by verifying the built artifact, not the commit.
+    **→ PiKVM 2026-07-20 (`5c15168`): FIXED, proven on the built artifact.** The
+    real `dist.img` carried `mb-portal.service` with the OLD 1200s timeout while the
+    repo had the fix — the builder only self-healed `mb-firstboot`. build-image now
+    re-deploys EVERY repo unit after the HEAD-sync, and `--verify` asserts the VALUES
+    (every installed unit byte-matches the repo, mb-portal timeout uncapped, wifi
+    save replaces) — those would have failed the stale build. Re-verified the image:
+    installed timeout is now `infinity`, 25/25 checks pass.
+28. **Headless (no-OLED) units need a name — mDNS default reversed** `[PORT-concept]`
+    — with no screen there is no way to discover the unit's IP, so DIY reversed
+    item 5b and now ships `mdns_alias="magicbridge"` **on by default**
+    (`magicbridge.local`). Trade-off documented rather than hidden: it's a
+    LAN-visible name and multiple units sharing it COLLIDE (avahi renames the
+    losers), so a fleet wants a unique/innocuous name per unit or `""` for full
+    stealth — the target (USB/HDMI) never sees it either way. Also worth knowing:
+    when `.local` "doesn't work" it is almost always a **client-side VPN**
+    (NordVPN etc.) hijacking DNS / blocking LAN mDNS, not the unit.
+    **→ PiKVM 2026-07-20 (`d5f3a95`): DELIBERATELY DIFFERENT — do NOT copy the
+    brand-on default.** It would contradict our verified item-5b anti-tell decision
+    (the unit must look like an ordinary PC on the LAN, not "magicbridge"). PiKVM
+    already ships BETTER headless reach than DIY: a UNIQUE, stable, innocuous
+    per-unit `DESKTOP-XXXXXXX.local` (regenerated per unit by secret-reset, survives
+    a fresh flash, so a fleet never collides), and avahi runs with BOTH
+    `avahi-daemon.service` AND `.socket` enabled+unmasked (verified in the image).
+    The only gap was the owner not knowing the name → the PIBOOT boot report now
+    prints `REACH ME AT: https://<hostname>.local/` + avahi state + the "`.local`
+    fails ⇒ client-side VPN blocking mDNS" note. Branded alias stays opt-in
+    (`MB_MDNS_ALIASES`), so nothing is silently copied.
+29. **USB capture that vanishes is a POWER problem, not software** `[VERIFY]` —
+    a DIY unit powered over USB-C from a laptop port showed "NO CAPTURE DEVICE":
+    `lsusb` listed no capture device and `/dev/video1` was gone, after having
+    worked minutes earlier. Enumerate→work→disappear = insufficient USB power.
+    Before debugging capture code, check `vcgencmd get_throttled` and put the Pi
+    on a real 5V/3A supply. (The same unit also dropped off the network entirely.)
+    **→ PiKVM 2026-07-20 (`d5f3a95`): surfaced everywhere for self-diagnosis.** The
+    cockpit already reported under-voltage in System→Power&Health; added an
+    ALWAYS-visible top-bar "⚠ LOW POWER" banner (shown on every tab while
+    under-volting, not just that sub-panel). The PIBOOT boot report now decodes
+    `vcgencmd get_throttled`, flags the bits, and calls out a vanished `/dev/video0`
+    that worked earlier as a POWER problem, not capture code — so it self-diagnoses.
 
 ---
 
 ## Session commits (DIY repo `magicbridge-diy`, for reference)
 ```
+fd5044b fix(image): deploy ALL unit files (stale .service undid the WiFi fix)    (item 27)
+f123533 fix(wifi): wrong password stranded the unit - verify + re-raise hotspot  (item 26)
+30cf625 feat(mdns): magicbridge.local ON by default (headless reachability)      (item 28)
+3d7936c feat(wol): scheduled Wake-on-LAN (cron-backed) + UI
+1aac451 feat(audio): USB-audio adapter as the working WebRTC audio path
+1c01e3d feat(ui): clip recording, health banner, USB-EDID honesty, reconnect
 3195250 feat(image): base = repo HEAD (full deploy + repo sync) + wtmp strip     (item 25)
 b0e7d98 feat(provision): Windows-readable setup report on the FAT boot partition (item 24-iv)
 7f279fe fix(wifi): captive portal never bound :80 - nginx held it, AP torn down  (item 24-iii)
