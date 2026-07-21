@@ -148,6 +148,24 @@ Device OFFLINE → code + syntax/headless-parse verified; runtime confirm pendin
   `limit_req` ~12/min on `/api/auth/login` only, via `mb-nginx-ratelimit.sh` that
   self-verifies + self-reverts (web UI can never go down) and runs post-boot.
 
+### ✅ ON-HARDWARE verification (device back online @ 172.16.20.171, 2026-07-21)
+Reached it only after disabling NordVPN — the item-28 gotcha proving itself (VPN blocks LAN).
+Deployed HEAD, then tested live. Two things my OFFLINE work had gotten wrong, caught + fixed:
+- **Safe-mode / MSD-hide: was BROKEN, now FIXED** (`1ae7fb2`). The `otg.devices.msd.default.
+  enabled=false` key was silently ignored — kvmd only builds mass_storage when
+  `kvmd.msd.type=="otg"` (kvmd/apps/otg:319). Switched to `kvmd.msd.type: disabled`. Verified:
+  safe-mode ON → `mass_storage.usb0` GONE (only 3 HID funcs, keyboard+mouse intact) → OFF → BACK.
+- **Main-login nginx rate-limit: DOESN'T WORK, disabled** (`24fd3ed`). `limit_req` never throttles
+  under kvmd's rendered config (exact location matched via a `return 418` probe; zone defined;
+  yet 25 rapid logins + even rate=2r/m all returned 200). Safe (web never went down) but inert →
+  removed from the boot path; documented. Stealth-gate lockout is the working protection.
+- **Verified working live:** 26 save_wifi replace (device python3: 1 block, wrong PSK gone),
+  27 mb-portal TimeoutStartSec=infinity (installed unit), 28 avahi daemon+socket both active +
+  DESKTOP-B5BFSPR.local resolves + boot report reach-me line, 29 boot report decodes
+  get_throttled (0x0=OK), stealth-gate lockout (5→429), FPS readout reads kvmd counters (not "—").
+- ⏳ Only genuinely-untriggerable-now: 26 full wrong-PSK→hotspot→reconnect E2E (needs a reboot
+  into provisioning — disruptive), the LOW POWER banner firing (needs real under-voltage).
+
 ### 🔁 DIY imaging sync — first-boot bug audit + repo-HEAD base (handoff 24/25, 2026-07-20)
 Device was OFFLINE (flashed unit not on the LAN) → prepared + committed, on-hardware confirm pending.
 - **24-i SSH/web dead on fresh flash → ALREADY SAFE** (`4c728d1`): mb-firstboot is
