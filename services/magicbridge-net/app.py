@@ -488,8 +488,10 @@ async def update_check(_):
     pending diff as incremental (fast) vs full (structural files changed)."""
     # git fetch writes .git/FETCH_HEAD, which is on the read-only rootfs.
     _rw()
-    sh("bash", "-c", "export HOME=/root; git config --global --add safe.directory /opt/magicbridge; "
-       "cd /opt/magicbridge && git fetch origin main 2>&1", timeout=30)
+    # safe.directory inline, NOT `git config --global`: /root is on the read-only
+    # rootfs so the global write always failed (noisy `$HOME not set` / RO-fs error),
+    # and root owns the repo so no dubious-ownership check even fires.
+    sh("bash", "-c", "cd /opt/magicbridge && git -c safe.directory=/opt/magicbridge fetch origin main 2>&1", timeout=30)
     _ro()
     _rc, cur = sh("bash", "-c", "git -C /opt/magicbridge rev-parse --short HEAD 2>/dev/null")
     _rc, origin = sh("bash", "-c", "git -C /opt/magicbridge rev-parse origin/main 2>/dev/null")
@@ -883,9 +885,9 @@ async def update_apply(_):
     _rw()
     try:
         rc, out = sh("bash", "-c",
-                     "export HOME=/root; git config --global --add safe.directory /opt/magicbridge; "
-                     "cd /opt/magicbridge && git fetch origin main 2>&1 && "
-                     "git reset --hard origin/main 2>&1", timeout=90)
+                     "cd /opt/magicbridge && "
+                     "git -c safe.directory=/opt/magicbridge fetch origin main 2>&1 && "
+                     "git -c safe.directory=/opt/magicbridge reset --hard origin/main 2>&1", timeout=90)
         if rc == 0:
             # Structural change since the last deploy? (systemd/nginx/kvmd-overrides
             # land on disk via git reset but are NOT active until re-installed.)
