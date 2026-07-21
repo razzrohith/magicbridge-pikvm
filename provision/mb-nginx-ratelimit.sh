@@ -1,5 +1,15 @@
 #!/usr/bin/env bash
 # ============================================================
+#  ⚠ DISABLED / DOES NOT WORK — kept for reference only. Verified on real hardware
+#  (172.16.20.171, 2026-07-21): this applies cleanly and the web UI stays up, BUT
+#  nginx `limit_req` NEVER THROTTLES under kvmd's rendered config. The exact
+#  `location = /api/auth/login` was confirmed to match (a bare `return 418` fired
+#  from it), the zone is defined at http context, yet 25 rapid logins all returned
+#  200 and even an aggressive rate=2r/m/burst=1 didn't reject a single request. No
+#  `real_ip` rewrite and the client hits :443 directly, so `$binary_remote_addr`
+#  should be valid — root cause needs deeper nginx-level debugging. NOTHING calls
+#  this; the stealth-panel in-code lockout is the working brute-force protection.
+#
 #  mb-nginx-ratelimit.sh — brute-force rate-limit the kvmd web login.
 #
 #  The stealth panel has its own per-IP lockout (in magicbridge-stealth), but the

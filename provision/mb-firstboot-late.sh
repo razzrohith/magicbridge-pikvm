@@ -65,12 +65,13 @@ for svc in sshd kvmd-nginx; do
     fi
 done
 
-# 2c. Brute-force rate-limit the main kvmd web login (nginx). Self-validating +
-#     self-reverting, so it can never take the web UI down. Post-boot only.
-if [ -f "$ROOT/provision/mb-nginx-ratelimit.sh" ]; then
-    echo "applying login rate-limit"
-    bash "$ROOT/provision/mb-nginx-ratelimit.sh"
-fi
+# 2c. (REMOVED) main-login nginx rate-limit. mb-nginx-ratelimit.sh was verified
+#     on real hardware to apply cleanly BUT NOT actually throttle: nginx `limit_req`
+#     does not engage under kvmd's rendered nginx config even with the exact
+#     `location = /api/auth/login` confirmed matching (a bare `return 418` fired).
+#     Shipping a rate-limit that doesn't limit is worse than none, so it's not run.
+#     Brute-force protection for the SENSITIVE face (the stealth identity panel) is
+#     the in-code per-IP lockout in magicbridge-stealth, which IS verified working.
 
 # 3. Mark done — force rw first (same lesson as mb-firstboot: mb-anon-defaults /
 #    the EDID block above may have left the rootfs read-only, and a silent RO
