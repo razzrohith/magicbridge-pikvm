@@ -92,6 +92,25 @@ save_wifi(){
         cat "$WPA_CONF" >> /tmp/mbwpa.$$ 2>/dev/null
         cp /tmp/mbwpa.$$ "$WPA_CONF"; rm -f /tmp/mbwpa.$$
     fi
+    # REPLACE, never blind-append (handoff 26b). Drop any existing block for this
+    # SSID first: a previously mistyped password would otherwise stay in the conf
+    # forever, and on a retry wpa_supplicant would hold TWO blocks for the same
+    # SSID — it can keep re-trying the bad one, so the corrected password never
+    # takes. Deleting the bad profile is the equivalent of DIY's "delete the bad
+    # NM connection on failure".
+    python3 - "$WPA_CONF" "$SSID" <<'PY' 2>/dev/null
+import re, sys
+path, ssid = sys.argv[1], sys.argv[2]
+try:
+    txt = open(path).read()
+except Exception:
+    sys.exit(0)
+# wpa network blocks never nest, so [^}]* is a safe block matcher.
+new = re.sub(r'\n?network=\{[^}]*ssid="%s"[^}]*\}\n?' % re.escape(ssid), '\n', txt)
+if new != txt:
+    open(path, 'w').write(new)
+PY
+
     # append a plaintext-passphrase block (no wpa_passphrase — it choked on the
     # SSID/space before; wpa_supplicant accepts a quoted ASCII psk directly)
     if [ -n "$PASS" ]; then
@@ -116,6 +135,7 @@ done
 # No network -> provisioning. Keep the hotspot up until someone submits creds;
 # then save + reboot (a clean boot connects reliably). Wrong creds => next boot
 # has no network => hotspot returns, so this effectively retries until connected.
+_fastexits=0
 while true; do
     setup_ap
     [ -x "$OLED" ] && "$OLED" "WiFi setup needed" "Join hotspot:" "$AP_SSID"
@@ -126,13 +146,35 @@ while true; do
     [ -f /opt/magicbridge/provision/mb-boot-report.sh ] && bash /opt/magicbridge/provision/mb-boot-report.sh hotspot-up 2>/dev/null
     echo "[$(date)] waiting for credentials (no timeout) ..."
     rm -f "$WIFI_FILE" "$TS_KEY"
+    _pstart=$(date +%s)
     python3 "$PORTAL" "$AP_IP" "$PORT" "$WIFI_FILE" "$TS_KEY"   # blocks until submit
     if [ -f "$WIFI_FILE" ]; then
+        # Verify + re-raise is handled BY DESIGN across a reboot, not in place:
+        # we save the creds and reboot. The next boot polls connectivity for ~40s
+        # (the `online` loop above); if the password was wrong there's no network,
+        # so this same script raises the hotspot again for a retry. So we never
+        # announce "Connected" prematurely and the AP always comes back on failure
+        # — the failure mode DIY hit (AP torn down before confirming) can't happen.
         teardown_ap
         save_wifi
         echo "[$(date)] rebooting to connect ..."
         sync; sleep 2; reboot; exit 0
     fi
-    echo "[$(date)] portal exited without credentials — reopening hotspot"
     teardown_ap
+    # Runaway guard (handoff 26d): if the portal EXITED IMMEDIATELY (crash / :8080
+    # busy) rather than a human closing the page, don't churn hostapd up/down in a
+    # tight loop — back off, and after a few fast exits drop a diagnostic report to
+    # PIBOOT. We never permanently give up (a human may still join), we just avoid
+    # the runaway that would be worse than the original bug.
+    _pelapsed=$(( $(date +%s) - _pstart ))
+    if [ "$_pelapsed" -lt 5 ]; then
+        _fastexits=$(( _fastexits + 1 ))
+        echo "[$(date)] portal exited in ${_pelapsed}s (fast exit #$_fastexits) — backing off"
+        [ "$_fastexits" -ge 3 ] && [ -f /opt/magicbridge/provision/mb-boot-report.sh ] && \
+            bash /opt/magicbridge/provision/mb-boot-report.sh portal-crash 2>/dev/null
+        sleep 10
+    else
+        _fastexits=0
+        echo "[$(date)] portal closed without credentials after ${_pelapsed}s — reopening hotspot"
+    fi
 done

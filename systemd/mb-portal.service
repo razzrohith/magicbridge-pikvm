@@ -12,7 +12,14 @@ Type=oneshot
 # executable bit, so ExecStart=<script> fails with permission-denied and the
 # service dies with no log. bash doesn't care about the +x bit.
 ExecStart=/bin/bash /opt/magicbridge/provision/mb-portal.sh
-TimeoutStartSec=1200
+# NO start timeout (handoff 26e). This oneshot legitimately blocks waiting for a
+# HUMAN to join the hotspot and type WiFi credentials. The old 1200s cap meant a
+# user who took >20 min got SIGTERM'd — and because hostapd/dnsmasq live in this
+# unit's cgroup, systemd killed the hotspot with it, leaving the unit with no WiFi
+# AND no hotspot: exactly the "stranded, power-cycle to recover" failure. Nothing
+# is ordered After= this unit, so an indefinite wait does not block boot (verified
+# live: during provisioning mb-portal=activating while sshd/kvmd were active).
+TimeoutStartSec=infinity
 RemainAfterExit=no
 
 [Install]
