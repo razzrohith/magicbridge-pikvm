@@ -488,7 +488,7 @@ async def update_check(_):
     pending diff as incremental (fast) vs full (structural files changed)."""
     # git fetch writes .git/FETCH_HEAD, which is on the read-only rootfs.
     _rw()
-    sh("bash", "-c", "git config --global --add safe.directory /opt/magicbridge; "
+    sh("bash", "-c", "export HOME=/root; git config --global --add safe.directory /opt/magicbridge; "
        "cd /opt/magicbridge && git fetch origin main 2>&1", timeout=30)
     _ro()
     _rc, cur = sh("bash", "-c", "git -C /opt/magicbridge rev-parse --short HEAD 2>/dev/null")
@@ -883,7 +883,7 @@ async def update_apply(_):
     _rw()
     try:
         rc, out = sh("bash", "-c",
-                     "git config --global --add safe.directory /opt/magicbridge; "
+                     "export HOME=/root; git config --global --add safe.directory /opt/magicbridge; "
                      "cd /opt/magicbridge && git fetch origin main 2>&1 && "
                      "git reset --hard origin/main 2>&1", timeout=90)
         if rc == 0:
