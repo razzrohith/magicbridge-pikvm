@@ -25,12 +25,13 @@ import os, sys, json, random, string, subprocess, asyncio, hashlib, hmac as _hma
 from pathlib import Path
 sys.path.insert(0, "/opt/magicbridge/services/common")
 try:
-    from mbcommon import get_logger, load_config, save_config
+    from mbcommon import get_logger, load_config, save_config, ConfigCorruptError
 except Exception:
     import logging
     def get_logger(n): logging.basicConfig(level=logging.INFO); return logging.getLogger(n)
     def load_config(n, d=None): return dict(d or {})
     def save_config(n, d): pass
+    class ConfigCorruptError(Exception): pass
 from aiohttp import web
 
 log = get_logger("mb-stealth")
@@ -199,16 +200,36 @@ def _pw_cfg() -> dict:
     return load_config("stealth_auth", {})
 
 def _check_pw(body: dict) -> bool:
-    cfg = _pw_cfg()
+    """Item 38 — FAIL CLOSED on an unreadable auth config.
+
+    A corrupt `stealth_auth.json` used to surface as an empty dict, so
+    `not cfg.get("hash")` was True and the gate opened for EVERYONE. A truncated
+    file is exactly what a power cut during a write produces, so that was a real
+    path from "unlucky unplug" to "USB identity panel wide open" — the opposite of
+    what a stealth device can tolerate. Denying instead is recoverable (repair or
+    remove the file); a silently-unlocked identity panel is not.
+    """
+    try:
+        cfg = _pw_cfg()
+    except ConfigCorruptError as e:
+        log.error("stealth auth config is CORRUPT — denying access (fail closed): %s", e)
+        return False
     if not cfg.get("hash"):
-        return True  # no gate configured → open
+        return True  # genuinely no gate configured (file absent) → open
     return _hmac.compare_digest(_hash_pw(str(body.get("password", "")), cfg.get("salt", "")), cfg["hash"])
 
 def _locked_response():
     return web.json_response({"ok": False, "locked": True, "error": "stealth password required"}, status=403)
 
 async def lock_status(_):
-    return web.json_response({"ok": True, "password_set": bool(_pw_cfg().get("hash"))})
+    try:
+        return web.json_response({"ok": True, "password_set": bool(_pw_cfg().get("hash"))})
+    except ConfigCorruptError:
+        # Never advertise "no password set" when we merely failed to READ the config —
+        # the UI would then present the panel as ungated (item 38, fail closed).
+        return web.json_response({"ok": False, "password_set": True, "config_corrupt": True,
+                                  "error": "stealth auth config unreadable — locked until repaired"},
+                                 status=503)
 
 # ---- brute-force lockout for the stealth gate ----------------------------
 # Per-IP failed-attempt tracking with escalating temporary lockout. In-memory

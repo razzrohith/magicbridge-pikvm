@@ -50,17 +50,49 @@ def load_branding() -> dict:
     return env
 
 
+class ConfigCorruptError(Exception):
+    """A config file EXISTS but could not be parsed.
+
+    Item 38: this must never be quietly downgraded to "empty". Treating a corrupt
+    file as empty makes callers bootstrap defaults over it — and for
+    `stealth_auth.json` that means `_check_pw` sees no hash and OPENS the stealth
+    gate. A truncated file is exactly what a power cut during a write produces, so
+    this is a realistic path from "unlucky unplug" to "identity panel unlocked".
+    Callers must fail CLOSED; the corrupt file is deliberately left on disk.
+    """
+
+
 def _read_json(path: Path):
+    """Return the parsed dict, or None if the file is simply ABSENT.
+    Raises ConfigCorruptError if the file exists but does not parse (including a
+    zero-length file, the classic interrupted-write result)."""
     try:
-        return json.loads(path.read_text())
-    except Exception:
+        raw = path.read_text()
+    except FileNotFoundError:
         return None
+    except OSError as e:                      # unreadable (perms/IO) — do NOT treat as empty
+        raise ConfigCorruptError(f"{path}: unreadable: {e}") from e
+    try:
+        return json.loads(raw)
+    except Exception as e:
+        raise ConfigCorruptError(f"{path}: invalid JSON ({len(raw)} bytes): {e}") from e
 
 
 def load_config(name: str, default: dict | None = None) -> dict:
-    """Runtime state (writable dir) wins over install default over caller default."""
+    """Runtime state (writable dir) wins over install default over caller default.
+
+    Fails CLOSED on corruption: if a config file exists but can't be parsed we log
+    loudly and raise ConfigCorruptError rather than silently returning defaults
+    (item 38). The bad file is left untouched so it can be inspected/recovered —
+    nothing bootstraps over it.
+    """
     for base in (STATE_DIR, CONFIG_DIR):
-        data = _read_json(base / f"{name}.json")
+        try:
+            data = _read_json(base / f"{name}.json")
+        except ConfigCorruptError as e:
+            _log.error("CORRUPT CONFIG %s.json — refusing to bootstrap defaults over it: %s",
+                       name, e)
+            raise
         if isinstance(data, dict):
             return data
     return dict(default or {})
@@ -91,12 +123,27 @@ def save_config(name: str, data: dict) -> bool:
             pass
         target = STATE_DIR / f"{name}.json"
         tmp = STATE_DIR / f".{name}.json.tmp"
-        tmp.write_text(json.dumps(data, indent=2))
+        # Item 38: os.replace is atomic, but WITHOUT fsync the file's CONTENTS aren't
+        # guaranteed on disk before the rename — a power cut can leave a zero-length or
+        # partial file under the real name. fsync the data, then the directory entry,
+        # so the rename can only ever expose fully-written bytes.
+        with open(tmp, "w") as f:
+            f.write(json.dumps(data, indent=2))
+            f.flush()
+            os.fsync(f.fileno())
         try:
             os.chmod(tmp, 0o600)
         except Exception:
             pass
         os.replace(tmp, target)   # atomic
+        try:
+            dfd = os.open(STATE_DIR, os.O_RDONLY)
+            try:
+                os.fsync(dfd)     # make the rename itself durable
+            finally:
+                os.close(dfd)
+        except Exception:
+            pass
         return True
     except Exception as e:
         _log.error("save_config(%s) failed: %s", name, e)
