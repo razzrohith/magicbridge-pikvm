@@ -148,6 +148,48 @@ Device OFFLINE → code + syntax/headless-parse verified; runtime confirm pendin
   `limit_req` ~12/min on `/api/auth/login` only, via `mb-nginx-ratelimit.sh` that
   self-verifies + self-reverts (web UI can never go down) and runs post-boot.
 
+### 🐛 Code audit findings (2026-07-22, device offline) — FIXED + PENDING
+Ran a full read-only audit while the Pi was unreachable (NordVPN). Two safe sidecar
+bugs fixed on main; the boot-critical ones are documented with proposed fixes but
+NOT applied — they need a fresh-flash test (a first-boot mistake bricks a card).
+
+**FIXED on main (safe, offline-verified, deploy on next align_pi):**
+- **Stealth USB-identity YAML injection + 500** (`1d64578`). Custom
+  manufacturer/product/serial went verbatim into a double-quoted YAML scalar in
+  `write_otg_override` — a `"`/newline broke the YAML → gadget rebuild fails →
+  target USB keyboard/mouse dead. Also `int(str(vendor_id),0)` in `set_identity`
+  was unguarded → non-numeric id 500'd. Added `_clean_usb_str()` (strips control
+  chars + `"`/`\`, caps 126) at the single choke point + id validation. Unit-tested
+  offline: legit identities unchanged, injection neutralized.
+- **Agent macros bypassed the feature flag** (`1d64578`). `run()` 403s when the
+  agent is disabled, but `save_macro`/`run_macro` did not — so with the agent OFF
+  (default) an authed caller could still run HID keystroke macros on the target.
+  Added the `agent_enabled()` 403 guard to both.
+
+**PENDING — need a fresh-flash test before applying (boot-critical, do NOT apply blind):**
+- **[med] First-boot branding runs on a read-only rootfs → silent no-op.**
+  `mb-firstboot.sh`: `mb_rw` (L41) → `mb-anon-defaults.sh` (L46) which ends `mb_ro`
+  → `apply_branding.py` (L70) then writes theme.generated.css / patches index.html /
+  writes the OLED override on a RO fs (EROFS, hidden by `>/dev/null`). Bounded (files
+  are baked at install; re-apply is dead), but a branding.env change never takes on
+  first boot. **Proposed:** add `mb_rw` right after the `mb-anon-defaults.sh` call
+  (L46) so L49-80 run rw. One line; verify on a fresh flash.
+- **[med] Concurrent first-boot remount race → possible provisioning LOOP.**
+  `mb-firstboot.service` and `mb-anon-defaults.service` are both
+  `WantedBy=sysinit.target` with NO ordering between them, and firstboot ALSO runs
+  `mb-anon-defaults.sh` internally. The standalone service's `mb_ro` can fire in
+  firstboot's marker-write window (L78-80) → marker write fails → first-boot re-runs
+  every boot → re-wipes the just-entered WiFi (the catastrophic loop the code fights).
+  **Proposed:** add `After=mb-firstboot.service` to `mb-anon-defaults.service` to
+  serialize them (firstboot skipped-after-done still orders correctly). Flash-test.
+  Related: `mbcommon.save_config` toggling the SHARED global rootfs ro in `finally`
+  can EROFS a concurrent sidecar save — non-refcounted rw/ro across services is a
+  latent architectural risk worth a refcount/lock.
+- **[low] Gemini agent provider can never work.** `_ask_llm` sends the OpenAI wire
+  format (Bearer auth, `choices[0].message`) to Google's endpoint, which uses
+  `:generateContent` + `?key=`. Always 502s. Agent is off by default. Either
+  implement Google's schema or drop `gemini` from `PROVIDERS`.
+
 ### ✅ Handoff items 31-36 — updater "reports success but not live" family (2026-07-21)
 DIY session added 31-36 (all one failure mode: a change that reports success but
 isn't live). Checked each against OUR code, fixed only what's real, verified on the
