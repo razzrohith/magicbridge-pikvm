@@ -367,8 +367,12 @@ against your actual code first (`services/`, `provision/portal.py`, `nginx/`,
     only those remain. **Verified offline A/B against the REAL module** with `sh`
     stubbed to a 2s command: before, a fast `/health` was blocked until t=6.00s
     (loop frozen); after, it was served at t=0.21s while the slow command ran.
-    (pending) the hold-a-key-during-an-install hardware proof - the device has been
-    unreachable (NordVPN blocking the LAN) for this whole round.
+    **HARDWARE-CONFIRMED 2026-07-22 @ 172.16.20.171 (HEAD `915c601`):** with a real
+    `wifi/scan` in flight (measured 2.05s), 8 concurrent `/health` probes returned in
+    <=0.043s each (median 3ms) - the sidecar's event loop stayed free under a genuine
+    multi-second admin command. (Architecture note: HID/video ride kvmd's own process,
+    not this sidecar, so what froze before was the whole `/mb/*` admin+status surface,
+    not literally the keyboard - i.e. less severe than DIY but real, and now fixed.)
 38. **Corrupt config must not silently reset auth to defaults** `[APPLIES - the
     load half only]` — your SAVE path is already correct: `mbcommon.py` writes
     `tmp` then `os.replace` with a `# atomic` comment and chmod 0600, so DIY's
@@ -397,6 +401,11 @@ against your actual code first (`services/`, `provision/portal.py`, `nginx/`,
     A/B:** before, zero-length / truncated / garbage configs all returned
     access_granted=True (gate open) x3; after, all three denied, with a healthy
     config still accepting the right password and rejecting the wrong one.
+    **HARDWARE-CONFIRMED 2026-07-22 @ .171:** dropped a zero-length, a truncated and a
+    garbage `stealth_auth.json` into the writable dir (which `load_config` reads first);
+    each gave `lock-status` HTTP 503 and a DENIED unlock (gate never opened); removing
+    it fell back cleanly to the pristine `/etc` default (`lock-status` 200). The `/etc`
+    default was never touched.
 39. **Verify USB identity writes actually took; never fire-and-forget**
     `[APPLIES - shared configfs core]` — you write the gadget identity under
     `/sys/kernel/config/usb_gadget/kvmd/...`. DIY found that swallowing configfs
@@ -425,7 +434,11 @@ against your actual code first (`services/`, `provision/portal.py`, `nginx/`,
     loudly either way. **Verified offline against a simulated configfs, 5/5:** target
     still on `PiKVM`/`Composite Device`/`CAFEBABE` -> 5 mismatches caught; serial
     silently not applied -> caught; UDC empty -> caught; single wrong string ->
-    caught; all-match -> verified. (pending) hardware re-verification.
+    caught; all-match -> verified. **HARDWARE-CONFIRMED 2026-07-22 @ .171:** a live
+    `POST /serial/random` returned `ok=True, verified=True, mismatches=[]`; the new
+    serial actually landed in configfs and the readback matched it, the UDC stayed
+    bound (target keeps input), and the gadget remained a Logitech receiver - kvmd-otg
+    active throughout.
 40. **Image/deploy must strip EVERY per-unit secret, and `--verify` must check**
     `[APPLIES as a class - your secrets differ]` — DIY shipped a distributable
     image whose scrub was a strict subset of its first-boot secret-reset, so it
@@ -472,8 +485,10 @@ against your actual code first (`services/`, `provision/portal.py`, `nginx/`,
     nginx config and its `auth_request` gate, which we neither override nor
     duplicate, so DIY's "proxied straight past auth" bug structurally cannot exist
     here. Still owed: the one-line hardware confirm (unauthenticated
-    `curl -k https://<unit>/streamer/stream` must NOT return video) - device
-    unreachable this round.
+    `curl -k https://<unit>/streamer/stream` must NOT return video).
+    **HARDWARE-CONFIRMED 2026-07-22 @ .171:** unauthenticated `/streamer/stream` and
+    `/streamer/snapshot` both returned HTTP 401, while an authenticated `/api/info`
+    returned 200 - the streamer is session-gated.
 42. `[CHECK]` **Can re-running the installer drop your lockdown?** Your
     `MB_LOCKDOWN` dedicated-chain design is BETTER than DIY's (which inserted
     into INPUT directly and got flushed). But a flush of INPUT still removes the
@@ -494,7 +509,10 @@ against your actual code first (`services/`, `provision/portal.py`, `nginx/`,
     the live jump and reports `lockdown` (live truth), `lockdown_configured` and
     `lockdown_drifted`. **Verified offline** with iptables stubbed: rules gone +
     config on -> live=False/drifted=True; rules present -> live=True/drifted=False.
-    Deliberately NOT done: auto re-applying lockdown at boot - re-arming a firewall
+    **HARDWARE-CONFIRMED 2026-07-22 @ .171:** enabled lockdown (live=True), then deleted
+    just the INPUT jump to mimic a reboot - `/status` reported
+    `live=False configured=True drifted=True`; full cleanup left no MB_LOCKDOWN rule and
+    :443 reachable. Deliberately NOT done: auto re-applying lockdown at boot - re-arming a firewall
     untested could lock the operator out of the web UI if they run lockdown without
     Tailscale. Needs hardware.
 43. `[CHECK]` **Login brute-force protection**, only if you have custom auth.
