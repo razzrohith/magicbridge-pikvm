@@ -164,6 +164,29 @@ if [[ "$MODE" == "verify" ]]; then
     chk "no saved WiFi (no ssid=)"    '! grep -qi "ssid=" "$R"/etc/wpa_supplicant/wpa_supplicant-wlan0.conf 2>/dev/null'
     chk "no spoofed-MAC .link"        '! ls "$R"/etc/systemd/network/70-mb-*.link >/dev/null 2>&1'
     chk "no Tailscale state"          '[[ ! -e "$R/var/lib/tailscale/tailscaled.state" ]]'
+    # ---- ITEM 40: one assertion PER secret, so a silently-failed strip FAILS the
+    # build instead of shipping. DIY's verify passed a leaking image because it only
+    # checked a subset of what its scrub was supposed to remove.
+    chk "no Tailscale state (any variant/backup)" '! ls "$R"/var/lib/tailscale/tailscaled.state* >/dev/null 2>&1'
+    chk "no Tailscale per-node certs"  '[[ ! -d "$R/var/lib/tailscale/certs" ]]'
+    chk "no runtime net.json (DuckDNS token/MAC)" '[[ ! -e "$R/var/lib/magicbridge/net.json" ]]'
+    chk "no runtime stealth.json (identity)"      '[[ ! -e "$R/var/lib/magicbridge/stealth.json" ]]'
+    chk "no runtime stealth_auth.json (panel pw)" '[[ ! -e "$R/var/lib/magicbridge/stealth_auth.json" ]]'
+    chk "no runtime agent.json (LLM API keys)"    '[[ ! -e "$R/var/lib/magicbridge/agent.json" ]]'
+    chk "no runtime macros.json (typed secrets)"  '[[ ! -e "$R/var/lib/magicbridge/macros.json" ]]'
+    chk "totp.secret empty"           '[[ ! -s "$R/etc/kvmd/totp.secret" ]]'
+    chk "no root bash history"        '[[ ! -e "$R/root/.bash_history" ]]'
+    chk "hostname is the placeholder tell" 'grep -qx "magicbridge" "$R/etc/hostname"'
+    chk "no saved WiFi psk"           '! grep -qiE "^[[:space:]]*psk=" "$R"/etc/wpa_supplicant/wpa_supplicant-wlan0.conf 2>/dev/null'
+    # Content-level sweep: catches a secret that leaked into a file we did not think
+    # to enumerate. Scoped to the dirs that can hold one, so it stays fast.
+    chk "no DuckDNS token anywhere in our dirs" \
+        '! grep -rqiE "duckdns.*token|token.*duckdns" "$R/etc/magicbridge" "$R/var/lib/magicbridge" 2>/dev/null'
+    # NB: the char class MUST allow - and _ — modern OpenAI keys are sk-proj-...,
+    # and a [A-Za-z0-9]-only class stops at the hyphen and silently misses them
+    # (caught by testing this assertion against a deliberately leaking fixture).
+    chk "no LLM API key material in our dirs" \
+        '! grep -rqE "sk-[A-Za-z0-9_-]{16,}|AIza[0-9A-Za-z_-]{20,}|xai-[A-Za-z0-9]{16,}" "$R/etc/magicbridge" "$R/var/lib/magicbridge" 2>/dev/null'
     chk "first-boot marker removed"   '[[ ! -e "$R/var/lib/magicbridge/.mb-firstboot-done" ]]'
     chk "mb-firstboot.service present" '[[ -f "$R/etc/systemd/system/mb-firstboot.service" ]]'
     chk "mb-firstboot ENABLED (sysinit)" '[[ -L "$R/etc/systemd/system/sysinit.target.wants/mb-firstboot.service" ]]'
@@ -276,11 +299,17 @@ rm -f "$R"/etc/kvmd/nginx/ssl/server.* "$R"/etc/kvmd/vnc/ssl/server.* 2>/dev/nul
 printf 'ctrl_interface=/run/wpa_supplicant\nupdate_config=1\ncountry=US\n' \
     > "$R/etc/wpa_supplicant/wpa_supplicant-wlan0.conf" 2>/dev/null || true
 rm -f "$R"/etc/systemd/network/70-mb-*.link 2>/dev/null || true
-rm -f "$R/var/lib/tailscale/tailscaled.state" 2>/dev/null || true
+# Tailscale keeps more than tailscaled.state (backup state, derp cache, per-node
+# certs) — removing only that one file left node-identifying material behind.
+rm -f "$R"/var/lib/tailscale/tailscaled.state* "$R"/var/lib/tailscale/derpmap.cache 2>/dev/null || true
+rm -rf "$R"/var/lib/tailscale/certs 2>/dev/null || true
 
 # 5. Our per-unit runtime state + USB serial override (regenerated per unit).
+#    macros.json included deliberately (item 40): agent macros are user-authored
+#    keystroke sequences, and a macro very often IS a typed password.
 rm -f "$R"/var/lib/magicbridge/net.json "$R"/var/lib/magicbridge/stealth.json \
-      "$R"/var/lib/magicbridge/stealth_auth.json "$R"/var/lib/magicbridge/agent.json 2>/dev/null || true
+      "$R"/var/lib/magicbridge/stealth_auth.json "$R"/var/lib/magicbridge/agent.json \
+      "$R"/var/lib/magicbridge/macros.json 2>/dev/null || true
 rm -f "$R/etc/kvmd/override.d/90-magicbridge-otg.yaml" 2>/dev/null || true
 # Residual mDNS tells: our neutralization leaves a pikvm.service.mb-bak backup
 # that avahi never broadcasts but which still carries PiKVM strings on disk.

@@ -94,7 +94,8 @@ if [ -f /etc/kvmd/vncpasswd ]; then
     chmod 600 /etc/kvmd/vncpasswd 2>/dev/null
 fi
 rm -f /var/lib/magicbridge/net.json /var/lib/magicbridge/stealth.json \
-      /var/lib/magicbridge/stealth_auth.json /var/lib/magicbridge/agent.json 2>/dev/null
+      /var/lib/magicbridge/stealth_auth.json /var/lib/magicbridge/agent.json \
+      /var/lib/magicbridge/macros.json 2>/dev/null
 
 # 5. USB gadget serial — drop our OTG override so a FRESH realistic serial is
 #    generated on the next gadget build (the stealth service re-emits one).
@@ -116,7 +117,8 @@ printf 'magicbridge\n' > /etc/hostname 2>/dev/null
 info "clearing Tailscale state"
 tailscale logout >/dev/null 2>&1
 systemctl stop tailscaled >/dev/null 2>&1
-rm -f /var/lib/tailscale/tailscaled.state 2>/dev/null
+rm -f /var/lib/tailscale/tailscaled.state* /var/lib/tailscale/derpmap.cache 2>/dev/null
+rm -rf /var/lib/tailscale/certs 2>/dev/null
 
 # 8. RAM logs / provisioning leftovers.
 rm -f /run/mb-*.log /tmp/mb-* 2>/dev/null
