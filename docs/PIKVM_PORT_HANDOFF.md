@@ -273,29 +273,6 @@ check PiKVM's own equivalent · **[PORT-concept]** take the idea, not the code.
     must report "deployment unverified → reinstall", so a unit can never be
     trapped in a fake up-to-date state. CHECK: kill your installer halfway, then
     ask the UI whether an update is available. If it says no, you have this bug.
-    **→ PiKVM 2026-07-21 (`535391b`): FIXED — this was real.** Our web updater
-    (`magicbridge-net`: `update_check`/`update_apply`) had exactly the structural
-    hole: `update_check` counted `git rev-list HEAD..origin/main`, and
-    `update_apply` did `git fetch && git reset --hard origin/main` FIRST, then
-    restarted the sidecars — so an apply interrupted after the reset (HEAD already
-    at origin) but before the restart left the unit running OLD code while the
-    check reported *"up to date"*, with no UI retry. Fix: `update_apply` now
-    deploys the structural bits a plain reset only drops on disk (systemd units +
-    `magicbridge.conf` + kvmd override) when they changed, then STAMPS the
-    fully-deployed commit to `/opt/magicbridge/.mb-deployed` as its last
-    success-only step; `update_check` compares that STAMP to origin, never HEAD; a
-    missing/garbage stamp returns `deployment unverified → reinstall`.
-    `magic-install.sh` and `build-image.sh` stamp too, so installed/flashed units
-    start honest. **VERIFIED ON HARDWARE (172.16.20.171):** reproduced the exact
-    post-`git reset`/pre-stamp state a mid-apply crash leaves (tree at HEAD, stamp
-    one behind) — the OLD `HEAD..origin` check reports "0 behind → up to date" (the
-    bug), the NEW stamp-based check reports "1 update available" (caught). Missing
-    stamp → "deployment unverified → reinstall". A REAL `POST /update/apply`
-    round-trip (unit one commit back → apply → deploys + stamps as last step →
-    "up to date") confirmed end-to-end. Also fixed a wart the live apply exposed
-    (`4801639`): the old `git config --global safe.directory` could never write
-    `/root/.gitconfig` on the RO rootfs — dropped it for inline `git -c
-    safe.directory=` (root owns the repo, so no ownership check fires anyway).
 32. **The installer pulls the repo it is RUNNING FROM** `[PORT — subtle, silent]`
     — `git` replaces a file by rename, so the already-open fd still points at the
     OLD inode and bash executes the **pre-pull text to the end**. The freshly
@@ -305,33 +282,11 @@ check PiKVM's own equivalent · **[PORT-concept]** take the idea, not the code.
     Fix: checksum `$0` around the pull and re-exec if it changed, bounded by an
     env var so it can re-exec exactly once. CHECK any script that updates its own
     source tree — a green exit code proves nothing here.
-    **→ PiKVM 2026-07-21: N/A (mechanism absent).** Our updater is a Python
-    aiohttp handler (`update_apply`), not a bash script that git-pulls its own
-    source. `git reset` overwrites `app.py` on disk, but the running interpreter
-    already holds the module in memory and runs the loaded handler to completion —
-    which is exactly what we want, since it restarts `magicbridge-net` as its LAST
-    act to pick up the new code. There is no "open fd → old inode → bash runs the
-    pre-pull text to the end" hazard, because nothing here executes the file it is
-    rewriting line-by-line. Verified the only installer, `magic-install.sh`, does
-    NOT self-pull (no `git pull`/`fetch`/`reset` inside it — it installs from an
-    already-checked-out tree; `align_pi.py` does the fetch, and it runs on the dev
-    box, not the Pi). The checksum-and-re-exec fix has nothing to guard here. If a
-    bash self-updater is ever added, port item 32 then.
 33. **A config-read-once service needs restarting after a config migration**
     `[PORT]` — the item-30 backfill added the mDNS key long after that oneshot had
     already run and exited with "no alias configured", so the unit stayed
     unreachable by name until a reboot. Migrating config is only half the job;
     restart whatever caches it, and report which way it ended up.
-    **→ PiKVM 2026-07-21: N/A (no config migration in the update path).**
-    `update_apply` is pure `git reset` + restart of all three sidecars + nginx
-    reload — there is no backfill step that adds a config key, so there's no
-    "oneshot already read the config and exited before the key appeared" window.
-    (Item 30's backfill mechanism doesn't exist here either: our services read
-    kvmd's own config plus runtime override files written on demand by the stealth
-    panel — not a versioned `config.json` whose schema grows per release.) And
-    because `update_apply` restarts every sidecar unconditionally, anything a
-    sidecar caches is already re-read on each update. If we later add an item-30
-    backfill, pair it with the matching restart per this item.
 34. **An expired session made EVERY control silently do nothing** `[PORT — check hard]`
     — "Shutdown Pi" appeared to work and the Pi stayed up. nginx had the truth:
     `POST /api/power 401`, twice. Nothing in the UI checked `fetch()` status, so
@@ -345,21 +300,6 @@ check PiKVM's own equivalent · **[PORT-concept]** take the idea, not the code.
     call sites. Same class on the server: `Popen` fire-and-forget returned
     `ok:True` even when the command failed, so broken sudo looked identical to
     success — run it, check the return code, report the real error.
-    **→ PiKVM 2026-07-21 (`535391b`): FIXED client-side; server-side already-safe.**
-    The class was present in the UI: `piPower` toasted "Shutting down…" *before*
-    awaiting and never checked status, and the fetch shim's `g()/p()` swallow
-    errors — so an expired-session 401 was invisible and every control silently
-    no-op'd. Fixed with ONE wrapper around the real `fetch` that catches 401 for
-    every call site (auth endpoints excluded so a wrong password can't loop) and
-    bounces to login once; `piPower` now checks the result too. Server side is
-    already-safe: the only `Popen` is the non-critical OLED animation, and the
-    power path goes through kvmd's ATX API (real HTTP status via the shim), so
-    there's no fire-and-forget `ok:True` masking a failed command. **VERIFIED ON
-    HARDWARE (headless Chrome):** logged into the cockpit, wiped the session
-    cookies, then triggered a control — the wrapper bounced the page to `/login/`
-    instead of a silent no-op. Discovered in passing: the "Shutdown/Reboot Pi"
-    buttons actually drive kvmd ATX = the TARGET's power, not the Pi (see item 35)
-    — a mislabel, flagged separately.
 35. **Power actions and update actions knew nothing about each other** `[PORT]`
     — the UI let a shutdown land in the middle of `install.sh`. Worse, the
     aftermath *looks* like a hang: a halted Pi keeps the OLED powered but stops
@@ -369,15 +309,6 @@ check PiKVM's own equivalent · **[PORT-concept]** take the idea, not the code.
     answerable, have the power endpoint return 409-busy, make the UI raise a
     second explicit confirm rather than a toast, and keep a `force` override so a
     wedged upgrade can never permanently trap a unit.
-    **→ PiKVM 2026-07-21: N/A (no UI control halts the Pi).** The failure needs a
-    UI button that can shut down the Pi mid-upgrade; we have none. "Shutdown/Reboot
-    Pi" → `/api/power` → kvmd `/api/atx/power` = the connected TARGET's ATX power
-    button, and a repo-wide grep confirms there is NO Pi self-poweroff/reboot
-    endpoint anywhere (only ATX/target). So a shutdown can't land on the Pi
-    mid-apply — the interlock has nothing to protect. (The buttons being labelled
-    "Pi" while they act on the target is a real but separate mislabel bug, not a
-    power/update race.) If a genuine Pi-power control is ever added, add the
-    named-unit "upgrade in flight?" interlock + 409-busy then.
 36. **Update classifier forced a full reinstall for files the Pi never runs**
     `[PORT — low value, quick]` — classifying real history showed 7 of 25 commits
     triggering a full reinstall, but 3 were classifier bugs: a **Windows** `.ps1`
@@ -387,19 +318,6 @@ check PiKVM's own equivalent · **[PORT-concept]** take the idea, not the code.
     rather than silently not deploy) but exclude host-only files and register new
     ones. Worth doing the same audit: classify your last ~25 commits and look at
     which fulls were genuine.
-    **→ PiKVM 2026-07-21: already-safe (audited).** Ran our own classifier over
-    the last 25 commits: only 2 were FULL (`4f1c420`, `6cde694`), both because
-    they changed real `systemd/*.service` files — both genuine, zero false-fulls.
-    The DIY bug can't occur here because our rule is an ALLOWLIST
-    (`^(systemd/|nginx/|magic-install.sh|kvmd-overrides/)` → full), not an
-    "unknown file → full" fallback — so host-only files (`*.ps1`, `align_pi.py`,
-    `deploy_*.py`) never force a full; they fall through to incremental, which for
-    us is `git reset` + sidecar restart: exactly right for a host-only file (it
-    lands in the tree and is simply never executed on the Pi). Inverse caveat: with
-    no unknown→full fallback, a brand-new *runtime* file that needs a special
-    install step outside `_deploy_structural`'s set (units/nginx/override) wouldn't
-    auto-deploy via the web updater — such files must be registered in
-    `magic-install.sh`. Acceptable given our narrow structural surface.
 
 **Amendment to item 29** (`get_throttled`): the DIY power work established the
 decode that makes it actionable — bits 0–3 are *happening now*, bits 16–19 are
@@ -413,8 +331,209 @@ different power design.)
 
 ---
 
+# Audit round (2026-07-22) — FILTERED for the PiKVM stack
+
+A six-pass audit of DIY found ~20 real issues. Most were fixed there. **This
+section lists ONLY the ones that plausibly apply to magicbridge-pikvm**, checked
+against your actual code first (`services/`, `provision/portal.py`, `nginx/`,
+`common/mbcommon.py`) so you aren't sent chasing DIY-specific bugs.
+
+## Applies — evidence found in your tree
+
+37. **Blocking `subprocess.run` inside async aiohttp handlers freezes ALL input**
+    `[APPLIES - confirmed pattern]` — your custom services are aiohttp
+    (`from aiohttp import web`, `async def` handlers in
+    `magicbridge-stealth/app.py`, `magicbridge-net/app.py`) AND they call
+    `subprocess.run` directly via the `sh()` helpers
+    (`magicbridge-net/app.py:47`, `magicbridge-stealth/app.py:89`,
+    `common/mbcommon.py:76`), plus `provision/portal.py`. aiohttp is
+    single-threaded: for the whole duration of any such command, EVERY connected
+    client's keyboard/mouse and all status polling is frozen. DIY measured this
+    as up to a 2-minute stall on a Tailscale install. Fix shape: a
+    `run_in_executor` wrapper for anything that can take more than a few hundred
+    ms (network calls, package installs, `nmcli`/`iptables` batches). Cheap
+    commands can stay inline.
+    **-> PiKVM 2026-07-22 (`3312a71`): APPLIED - confirmed present and worse than
+    described.** The worst blocker was `tailscale_install`: pacman (120s) plus a
+    `curl|sh` fallback (180s) = up to ~5 minutes of a completely dead KVM. Added
+    `sh_a()` (async `sh`) and `run_blocking()` (ONE executor hop for a whole batch,
+    so rw/ro windows and firewall/MAC sequences stay coherent in a single thread),
+    then routed the long work through them: tailscale install/up/down/funnel, the
+    iptables lockdown batch, MAC set/clear (interface down/up), wifi scan/connect,
+    the reverse-DNS client lookup (`gethostbyaddr` per peer - hangs for seconds),
+    ping/iw latency, git fetch, the whole update deploy, `kvmd-edidconf --apply`,
+    journalctl, VNC start/stop. Cheap local calls (git rev-parse, `systemctl
+    is-active`, `command -v`, chmod, sysfs echo) stay inline; an AST sweep confirms
+    only those remain. **Verified offline A/B against the REAL module** with `sh`
+    stubbed to a 2s command: before, a fast `/health` was blocked until t=6.00s
+    (loop frozen); after, it was served at t=0.21s while the slow command ran.
+    (pending) the hold-a-key-during-an-install hardware proof - the device has been
+    unreachable (NordVPN blocking the LAN) for this whole round.
+38. **Corrupt config must not silently reset auth to defaults** `[APPLIES - the
+    load half only]` — your SAVE path is already correct: `mbcommon.py` writes
+    `tmp` then `os.replace` with a `# atomic` comment and chmod 0600, so DIY's
+    truncating-write bug does NOT apply to you. **Check the other half**: when
+    the config fails to PARSE at startup, does your code treat it as "empty" and
+    bootstrap defaults? In DIY that path rewrote the DEFAULT password with 2FA
+    off and wiped every other section - a single unlucky unplug silently
+    reverted a stealth device to a public default password. Fail CLOSED instead:
+    keep the corrupt file, log loudly, refuse to bootstrap over it. (Also worth
+    adding: `fsync` the tmp file before `os.replace` - the rename is atomic but
+    without fsync the contents aren't guaranteed on disk first.)
+    **-> PiKVM 2026-07-22 (`8fa4c27`): APPLIED - and the load half was worse here
+    than in DIY.** The save path was left alone (already correct). The load half:
+    `_read_json` swallowed ANY parse error -> `None`; `load_config` saw a non-dict ->
+    returned the caller's default `{}`; and `_check_pw` reads
+    `if not cfg.get("hash"): return True  # no gate configured -> open`. So a corrupt
+    `stealth_auth.json` did not reset the password to a default - **it removed the
+    stealth gate entirely**. A truncated file is exactly what a power cut during a
+    write produces, so that was a real path from an unlucky unplug to a wide-open
+    USB identity panel. Added `ConfigCorruptError`: a file that EXISTS but will not
+    parse (including zero-length) is no longer downgraded to "empty" - `load_config`
+    logs loudly and raises, and the bad file is deliberately left on disk so nothing
+    bootstraps over it. `_check_pw` and `lock_status` fail CLOSED (deny; never report
+    "no password set" merely because the config was unreadable). `save_config` now
+    fsyncs the tmp file and the directory around `os.replace`. **Verified offline
+    A/B:** before, zero-length / truncated / garbage configs all returned
+    access_granted=True (gate open) x3; after, all three denied, with a healthy
+    config still accepting the right password and rejecting the wrong one.
+39. **Verify USB identity writes actually took; never fire-and-forget**
+    `[APPLIES - shared configfs core]` — you write the gadget identity under
+    `/sys/kernel/config/usb_gadget/kvmd/...`. DIY found that swallowing configfs
+    write errors made the panel report a new identity applied while the target
+    still enumerated the OLD device - a silent stealth mismatch, the exact class
+    this project cares most about. You already read the serial back from configfs
+    as source of truth (good); extend that to the WRITE path: surface failures,
+    read the strings back after the rebind, and tell the operator if the live
+    gadget didn't accept it. Related and worth re-checking: any unbind/rebind of
+    the UDC must reattach in a `finally`, or a failure in between leaves the
+    target with no keyboard/mouse.
+    **-> PiKVM 2026-07-22 (`37eaf68`): APPLIED, both halves.** (1) The write was
+    fire-and-forget: the panel reported "applied" purely from `systemctl start
+    kvmd-otg` returning 0, which does NOT prove the target enumerates our identity -
+    a silently-rejected override left the operator believing the device looked like
+    a Logitech receiver while the target still saw the old one. Added
+    `_live_gadget_strings()` (reads idVendor/idProduct + manufacturer/product/
+    serialnumber straight from configfs) and `verify_identity()`, comparing against
+    the SANITIZED values actually written; all four apply paths now run
+    `apply_identity()` = write -> rebuild -> READ BACK -> verify, returning
+    `ok = started AND verified` plus `live{}` and `mismatches[]` so the operator is
+    told exactly which field the gadget refused. (2) `rebuild_gadget` tears the
+    gadget down and only the `rc != 0` branch retried - any other failure path
+    returned with the target having NO keyboard/mouse. The sequence is now wrapped
+    so a `finally` always checks UDC binding and makes a last-ditch reattach, logging
+    loudly either way. **Verified offline against a simulated configfs, 5/5:** target
+    still on `PiKVM`/`Composite Device`/`CAFEBABE` -> 5 mismatches caught; serial
+    silently not applied -> caught; UDC empty -> caught; single wrong string ->
+    caught; all-match -> verified. (pending) hardware re-verification.
+40. **Image/deploy must strip EVERY per-unit secret, and `--verify` must check**
+    `[APPLIES as a class - your secrets differ]` — DIY shipped a distributable
+    image whose scrub was a strict subset of its first-boot secret-reset, so it
+    could ship a DuckDNS token in cleartext, a baked shared MAC unit, a plaintext
+    WiFi PSK, and provider API keys - and verify passed anyway because it never
+    checked for them. Your secret set is different, so don't copy the list:
+    enumerate what YOUR golden unit accumulates (tokens, keys, MAC/identity
+    units, saved WiFi, machine-ids, logs), make the image scrub a superset of
+    your first-boot reset, and add an assertion per item so a leak FAILS the
+    build instead of shipping.
+    **-> PiKVM 2026-07-22 (`9aa5e1c`): APPLIED as a class.** Enumerated what OUR
+    golden unit accumulates rather than copying DIY's list. Two real scrub gaps -
+    cleared by NEITHER the image nor the first-boot reset: **`macros.json`** (agent
+    macros are user-authored keystroke sequences, and a macro very often IS a typed
+    password) and **Tailscale beyond `tailscaled.state`** (backup state, derp cache,
+    per-node certs all survived). Both now stripped in both places. The core of the
+    item was the missing assertions: `--verify` checked only a subset, so a silently
+    failed strip would ship. Added one assertion per secret - runtime net/stealth/
+    stealth_auth/agent/macros JSONs absent, tailscale state (any variant) + certs
+    absent, totp.secret empty, no root bash history, hostname is the placeholder, no
+    saved WiFi `psk=`, plus content-level sweeps for a DuckDNS token and LLM API key
+    material anywhere in our dirs. **Deliberately still KEPT** (documented,
+    anonymity-neutral): `/etc/magicbridge/kvmd.json`, `stealth_auth.json` and kvmd's
+    `htpasswd` hold only SHARED documented defaults - identical on every unit, so
+    they cannot cross-link units, and an operator's own change lands in `/var/lib`,
+    which IS stripped. **Verified** by running the assertions against a deliberately
+    LEAKING fixture and a clean one: 8/9 fired on the leak, 0 on the clean image -
+    and the 9th (LLM key sweep) did NOT fire because `[A-Za-z0-9]` stops at the
+    hyphen in `sk-proj-...`; fixed the class and re-tested, now catching sk-proj /
+    sk-ant / sk- / AIza / xai with no false positives on benign config.
+
+## Worth a one-line check (lower confidence)
+
+41. `[CHECK]` **Is the video stream reachable without a session?** DIY proxied
+    `/stream` and `/snapshot` straight to ustreamer, bypassing auth entirely -
+    anyone on the LAN/tailnet could watch the target's screen. kvmd normally
+    gates its streamer, so this is probably already fine for you, but your
+    `nginx/magicbridge.conf` comment notes `/streamer` is deliberately left
+    reachable for the cockpit - confirm that path still demands a session.
+    **-> PiKVM 2026-07-22: no bypass in our config (hardware confirm pending).**
+    Unlike DIY, we never proxy to ustreamer ourselves: `nginx/magicbridge.conf`
+    defines NO `/streamer` or `/snapshot` location at all - the only occurrence of
+    the word is the comment itself. Those paths are served entirely by kvmd's own
+    nginx config and its `auth_request` gate, which we neither override nor
+    duplicate, so DIY's "proxied straight past auth" bug structurally cannot exist
+    here. Still owed: the one-line hardware confirm (unauthenticated
+    `curl -k https://<unit>/streamer/stream` must NOT return video) - device
+    unreachable this round.
+42. `[CHECK]` **Can re-running the installer drop your lockdown?** Your
+    `MB_LOCKDOWN` dedicated-chain design is BETTER than DIY's (which inserted
+    into INPUT directly and got flushed). But a flush of INPUT still removes the
+    `-j MB_LOCKDOWN` jump even though the chain survives. `magic-install.sh`
+    didn't obviously touch iptables, so this may be a non-issue - just confirm
+    an installer re-run can't leave the jump missing while the chain looks fine.
+    **-> PiKVM 2026-07-22: installer concern N/A (evidence); found a REAL adjacent
+    bug and fixed it (`95eca92`).** N/A evidence: a repo-wide grep shows the only
+    iptables use outside the lockdown handler is `mb-portal.sh`, and it touches the
+    **nat** table only (`-t nat -A/-F PREROUTING` for the captive redirect) - it
+    never flushes filter INPUT - while `magic-install.sh` contains no iptables at
+    all. So an installer re-run cannot drop the `-j MB_LOCKDOWN` jump. **But** the
+    check surfaced the same failure family: `/mb/net/status` never returned
+    `lockdown` at all, so the UI toggle (which reads `s.lockdown`) always showed OFF
+    even right after enabling it; and nothing persists iptables across a reboot, so
+    after a reboot the chain AND jump are gone while the saved config still says
+    on - the user believes they are protected and they are not. `status` now probes
+    the live jump and reports `lockdown` (live truth), `lockdown_configured` and
+    `lockdown_drifted`. **Verified offline** with iptables stubbed: rules gone +
+    config on -> live=False/drifted=True; rules present -> live=True/drifted=False.
+    Deliberately NOT done: auto re-applying lockdown at boot - re-arming a firewall
+    untested could lock the operator out of the web UI if they run lockdown without
+    Tailscale. Needs hardware.
+43. `[CHECK]` **Login brute-force protection**, only if you have custom auth.
+    DIY's per-IP delay used `asyncio.sleep`, so concurrent attempts all slept in
+    PARALLEL - no real cost, and no lockout ever. If kvmd handles your auth,
+    N/A.
+    **-> PiKVM 2026-07-22: N/A for the main login; our own gate is already correct
+    (evidence).** kvmd owns the main web auth (`POST /api/auth/login`), so DIY's
+    hand-rolled throttle does not apply - and an earlier round already established
+    that an nginx `limit_req` in front of it is inert in kvmd's context, so it was
+    honestly removed rather than shipped non-functional. The one piece of custom
+    auth we do own, the stealth-panel gate, does NOT have DIY's bug: it never calls
+    `asyncio.sleep`. It stores `locked_until` per IP and returns **429 immediately**
+    once the threshold is passed (`_LOCK_AFTER=5`, escalating 15s->30s->60s... capped
+    at 900s), so concurrent attempts all hit the same timestamp check and are all
+    rejected - there is no per-request sleep to run in parallel. Previously verified
+    on hardware (5 wrong attempts -> 429, and the correct password is refused during
+    the window).
+
+## Explicitly NOT for you — do not spend time on these
+
+- **Stuck keys / Right-Ctrl chord / release-on-focus-loss** — DIY's own
+  hand-rolled key handler. You use PiKVM's mature KVM web UI for key handling.
+- **Video watchdog re-detect, sticky-mjpeg fallback, encoder input clamps** —
+  DIY's `video.py` manages ustreamer itself; kvmd manages yours.
+- **Viewer-IP XSS in the connections list** — DIY's custom viewer widget.
+- **The power-path A/B results and `--h264-boost` framerate work** — different
+  board and power design (though if you ever see the encoder capped at ~25fps
+  on a Pi 4, `--h264-boost` is worth knowing about).
+
+---
+
 ## Session commits (DIY repo `magicbridge-diy`, for reference)
 ```
+270bbb8 fix(stealth): USB identity change verified, not fire-and-forget          (item 39)
+de7fe3d fix(auth): require login for /stream and /snapshot                       (item 41)
+59bd460 perf(api): long admin subprocesses off the event loop                    (item 37)
+bc3c51b fix(config): atomic writes + fail-closed on corrupt                      (item 38)
+aba5dec fix(image): strip DuckDNS token / MAC / WiFi-PSK secrets                 (item 40)
 77f739f fix(install): re-exec after self-pull; restart mdns after backfill       (items 32,33)
 b81108c fix(update): track what is DEPLOYED, not what the repo clone is at       (item 31)
 c68363c fix(power): refuse to halt while a full upgrade is still running         (item 35)
