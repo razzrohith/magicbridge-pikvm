@@ -73,6 +73,17 @@ PRESETS = {
 def rand_serial(n: int = 8) -> str:
     return "".join(random.choices(string.hexdigits.upper(), k=n))
 
+def _clean_usb_str(v, fallback: str = "") -> str:
+    """Sanitize a user-supplied USB string descriptor (manufacturer/product/serial)
+    before it goes into the kvmd OTG YAML override. Strips control characters and the
+    two characters that would break a double-quoted YAML scalar (`"` and `\\`), and
+    caps length at the USB string-descriptor max (126). Without this, a stray quote or
+    newline in a CUSTOM identity produces malformed YAML that fails the gadget rebuild
+    and leaves the target's USB keyboard/mouse dead until the override is hand-removed."""
+    s = str(v if v is not None else "")
+    s = "".join(ch for ch in s if ch >= " " and ch not in '"\\').strip()
+    return s[:126] or fallback
+
 def _sh(*args, timeout=20) -> tuple[int, str]:
     try:
         p = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
@@ -104,16 +115,22 @@ def write_otg_override(ident: dict, hide_msd: bool = False) -> None:
     drops the interface — verified on-device that the earlier
     `otg.devices.msd.default.enabled` key was silently ignored.
     """
-    serial = str(ident.get("serial") or "").strip()
+    serial = _clean_usb_str(ident.get("serial"))
     if not serial or serial.upper() == "CAFEBABE":
         serial = rand_serial()
     ident["serial"] = serial
+    # Sanitize the string descriptors at this single choke point — every path
+    # (set_identity/random_serial/safe_mode/restore) funnels through here, so bad
+    # input can never reach the YAML regardless of caller. Fallbacks are the safe
+    # default receiver identity so a fully-stripped value degrades gracefully.
+    manufacturer = _clean_usb_str(ident.get("manufacturer"), "Logitech")
+    product = _clean_usb_str(ident.get("product"), "USB Receiver")
     body = (
         "otg:\n"
         f"    vendor_id: 0x{ident['vendor_id']:04X}\n"
         f"    product_id: 0x{ident['product_id']:04X}\n"
-        f"    manufacturer: \"{ident['manufacturer']}\"\n"
-        f"    product: \"{ident['product']}\"\n"
+        f"    manufacturer: \"{manufacturer}\"\n"
+        f"    product: \"{product}\"\n"
         f"    serial: \"{serial}\"\n"
     )
     if hide_msd:
@@ -271,12 +288,21 @@ async def set_identity(request: web.Request):
     if body.get("preset") in PRESETS:
         ident = {**PRESETS[body["preset"]], "preset": body["preset"]}
     else:  # custom fields
+        # Parse the IDs defensively: a non-numeric or out-of-range vendor/product id
+        # used to raise here (outside the try/except below) and 500 the request.
+        try:
+            vid = int(str(body.get("vendor_id", cur["vendor_id"])), 0)
+            pid = int(str(body.get("product_id", cur["product_id"])), 0)
+        except (ValueError, TypeError):
+            return web.json_response({"ok": False, "error": "vendor_id/product_id must be numeric (e.g. 0x046D)"}, status=200)
+        if not (0 <= vid <= 0xFFFF and 0 <= pid <= 0xFFFF):
+            return web.json_response({"ok": False, "error": "vendor_id/product_id must be 16-bit (0x0000-0xFFFF)"}, status=200)
         ident = {
             "preset": "custom",
             "label": body.get("label", "Custom"),
             "verified": False,
-            "vendor_id": int(str(body.get("vendor_id", cur["vendor_id"])), 0),
-            "product_id": int(str(body.get("product_id", cur["product_id"])), 0),
+            "vendor_id": vid,
+            "product_id": pid,
             "manufacturer": body.get("manufacturer", cur["manufacturer"]),
             "product": body.get("product", cur["product"]),
         }
