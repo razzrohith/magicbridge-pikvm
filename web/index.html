@@ -1876,7 +1876,7 @@ async function applyVideo(){
 //      Janus connect/attach error handlers and the connect-timeout guard
 //      below catch a WebRTC failure and switch the UI back to MJPEG live,
 //      without waiting for a page reload or another status poll.
-let _janus = null, _janusHandle = null, _activeTransport = null, _webrtcTimeout = null;
+let _janus = null, _janusHandle = null, _activeTransport = null, _webrtcTimeout = null, _videoInited = false;
 
 function setVideoTransport(mode){
   _activeTransport = mode;
@@ -1923,8 +1923,8 @@ function startWebRTC(){
   // back rather than leaving the viewer stuck on a black video element.
   clearTimeout(_webrtcTimeout);
   _webrtcTimeout = setTimeout(()=>{
-    if(_activeTransport === 'h264') _webrtcFallbackToMjpeg('connect timeout (8s)');
-  }, 8000);
+    if(_activeTransport === 'h264') _webrtcFallbackToMjpeg('connect timeout (12s)');
+  }, 12000);   // cold start: the FIRST client also spins up ustreamer's h264 sink
   // Callback names/shape below (onremotetrack + manual MediaStream assembly,
   // watch/start/jsep flow) match janus.js v1.0.0 specifically - that's the
   // tag install_janus_webrtc.sh pins the server + this client library to,
@@ -2007,10 +2007,33 @@ function toggleAudioMute(){
 // running (video.py may have silently fallen back server-side). Only
 // acts on real changes so this is safe to call on every status poll.
 function syncVideoTransport(mode){
-  if(!mode || mode === _activeTransport) return;
+  // Don't run during initial load: `mode` here is derived from _activeTransport
+  // itself (see applyStatus -> d.stream.mode), so before initVideo() has chosen a
+  // transport it is always 'mjpeg' and would clobber the WebRTC default. initVideo()
+  // owns the first selection; after that this only reconciles a real change.
+  if(!_videoInited || !mode || mode === _activeTransport) return;
   const sel = document.getElementById('sel-mode');
   if(sel) sel.value = mode;
   setVideoTransport(mode);
+}
+
+// Start video on the DEFAULT transport (WebRTC/H.264 per the dropdown ★), not
+// MJPEG. The old init derived the "running mode" from _activeTransport (null on
+// load) so it always self-selected MJPEG and WebRTC was never even attempted -
+// which read as "WebRTC doesn't work". janus.js loads as a separate async module,
+// so wait briefly for window.Janus before the first attempt to avoid a spurious
+// 'not loaded' fallback; if it never loads, setVideoTransport falls back cleanly.
+function initVideo(){
+  if(_videoInited) return;
+  _videoInited = true;
+  const sel = document.getElementById('sel-mode');
+  const want = (sel && sel.value) || 'h264';
+  if(want !== 'h264'){ setVideoTransport(want); return; }
+  let waited = 0;
+  (function waitJanus(){
+    if(typeof Janus !== 'undefined' || waited >= 5000){ setVideoTransport('h264'); return; }
+    waited += 200; setTimeout(waitJanus, 200);
+  })();
 }
 
 function stopWebRTC(){
@@ -3067,6 +3090,7 @@ document.addEventListener('touchend',()=>{_dragging=false;$vkbd.style.transition
 
 // Init
 connect();
+initVideo();          // start on the WebRTC/H.264 default (was never attempted before)
 refreshStatus();
 identityRefresh();
 tsRefresh();
