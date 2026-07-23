@@ -1906,7 +1906,7 @@ async function applyVideo(){
 //      Janus connect/attach error handlers and the connect-timeout guard
 //      below catch a WebRTC failure and switch the UI back to MJPEG live,
 //      without waiting for a page reload or another status poll.
-let _janus = null, _janusHandle = null, _activeTransport = null, _webrtcTimeout = null, _videoInited = false;
+let _janus = null, _janusHandle = null, _activeTransport = null, _webrtcTimeout = null, _videoInited = false, _rtcLivePoll = null;
 
 function setVideoTransport(mode){
   _activeTransport = mode;
@@ -1961,7 +1961,10 @@ function startWebRTC(){
   // back rather than leaving the viewer stuck on a black video element.
   clearTimeout(_webrtcTimeout);
   _webrtcTimeout = setTimeout(()=>{
-    if(_activeTransport === 'h264') _webrtcFallbackToMjpeg('connect timeout (12s)');
+    // Fall back only if VIDEO genuinely isn't rendering (videoWidth still 0). Covers
+    // both "never connected" and "audio requested but absent -> dead 0x0 video track".
+    const vid = document.getElementById('webrtc-view');
+    if(_activeTransport === 'h264' && (!vid || !vid.videoWidth)) _webrtcFallbackToMjpeg('no video frames (12s)');
   }, 12000);   // cold start: the FIRST client also spins up ustreamer's h264 sink
   // Callback names/shape below (onremotetrack + manual MediaStream assembly,
   // watch/start/jsep flow) match janus.js v1.0.0 specifically - that's the
@@ -1996,20 +1999,26 @@ function startWebRTC(){
           },
           onremotetrack: function(track, mid, added){
             if(!added) return;
-            clearTimeout(_webrtcTimeout);
             const vid = document.getElementById('webrtc-view');
             if(vid.srcObject === null) vid.srcObject = new MediaStream();
             vid.srcObject.addTrack(track.clone());
-            // The H.264 track is arriving — hide the "No Signal"/"Connecting…"
-            // overlay so it stops covering the live video (this was the black /
-            // "No signal"-over-working-video bug on the WebRTC path).
-            if(track.kind === 'video'){ _streamLive(); }
-            // Audio track only shows up if the C790 has I2S audio wired +
-            // Janus's audio block resolved a real ALSA device (see video.py
-            // _sync_janus_audio_cfg). Reveal the unmute control only when
-            // there's actually something to unmute - starts muted either
-            // way since browsers block autoplaying audio without a user
-            // gesture first (toggleAudioMute() below is that gesture).
+            // Mark the stream "live" only when the VIDEO element actually has frames
+            // (videoWidth>0), NOT merely when a track object arrives. We now request
+            // audio, and if the host isn't presenting any the plugin can hand back a
+            // "connected" video track that never renders (stuck 0x0). Poll for real
+            // frames; the connect-timeout below drops to MJPEG if they never come, so
+            // the picture is never left black. (Don't clearTimeout on track arrival.)
+            if(track.kind === 'video'){
+              clearInterval(_rtcLivePoll);
+              _rtcLivePoll = setInterval(function(){
+                if(_activeTransport !== 'h264'){ clearInterval(_rtcLivePoll); return; }
+                if(vid.videoWidth > 0){ clearInterval(_rtcLivePoll); clearTimeout(_webrtcTimeout); _streamLive(); }
+              }, 400);
+            }
+            // Audio = the HDMI audio captured from the TC358743 (target->browser).
+            // Reveal the unmute control when the audio track arrives — it starts muted
+            // because browsers block autoplaying audio until a user gesture
+            // (toggleAudioMute() is that gesture).
             if(track.kind === 'audio'){
               document.getElementById('audio-btn').style.display = 'flex';
               document.getElementById('fh-audio-btn').style.display = '';
@@ -2029,10 +2038,13 @@ function startWebRTC(){
 function _sendWatch(attemptsLeft){
   if(!_janusHandle) return;
   _janusHandle.send({
-    // audio:true just asks Janus to include an audio track IF the plugin's
-    // audio block resolved a real device - harmless to always send even
-    // with no C790/audio wired yet, it just won't produce an audio track.
-    message: {request: 'watch', params: {orientation: 0, audio: false, mic: false, camera: false}},
+    // audio:true requests the HDMI audio the TC358743 captures (target->browser) —
+    // passive, stealth-safe. mic:false stays (the mic direction needs a USB audio
+    // GADGET the target would see, breaking the kb+mouse-only profile). NOTE: if the
+    // host isn't presenting audio, requesting it can yield a dead 0x0 video track —
+    // the onremotetrack frame-poll + connect-timeout drop to MJPEG so video is never
+    // stuck black (verified: Janus reports "No audio presented from the host").
+    message: {request: 'watch', params: {orientation: 0, audio: true, mic: false, camera: false}},
     error: function(){
       if(attemptsLeft > 0) setTimeout(function(){ _sendWatch(attemptsLeft - 1); }, 1000);
       else _webrtcFallbackToMjpeg('watch request failed after retries');
@@ -2085,6 +2097,7 @@ function initVideo(){
 }
 
 function stopWebRTC(){
+  clearInterval(_rtcLivePoll); _rtcLivePoll = null;
   try{
     if(_janusHandle){ _janusHandle.hangup(); _janusHandle = null; }
     if(_janus){ _janus.destroy(); _janus = null; }
