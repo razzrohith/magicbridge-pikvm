@@ -1241,7 +1241,7 @@ body:not(.fs) .fs-hud{display:none!important}
   const J=(o,s)=>new Response(JSON.stringify(o),{status:s||200,headers:{'Content-Type':'application/json'}});
   const g=async u=>{try{const r=await _F(u,{credentials:'include'});return await r.json();}catch(e){return null;}};
   const p=async(u,b)=>{try{const r=await _F(u,{method:'POST',credentials:'include',headers:{'content-type':'application/json'},body:b?JSON.stringify(b):null});return await r.json();}catch(e){return {ok:false,error:String(e)};}};
-  const hex=n=>n!=null?('0x'+Number(n).toString(16)):null;
+  const hex=n=>n!=null?('0x'+Number(n).toString(16).padStart(4,'0')):null;   // USB VID/PID are 16-bit -> 4 hex digits (0x046d, not 0x46d)
   window.fetch=function(url,opts){
     if(typeof url!=='string'||!url.startsWith('/api/')) return _F(url,opts);
     // Boundary-aware passthrough: '/api/hid' must NOT swallow '/api/hid-autodisconnect'
