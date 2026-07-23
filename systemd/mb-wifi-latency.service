@@ -1,0 +1,14 @@
+[Unit]
+Description=MagicBridge: disable Wi-Fi power-save on wlan0 (KVM latency/jitter)
+# Run when the interface appears, and again if it comes back (reconnect/roam),
+# so power-save can't silently re-enable after this unit last ran.
+After=sys-subsystem-net-devices-wlan0.device
+BindsTo=sys-subsystem-net-devices-wlan0.device
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/bash /opt/magicbridge/provision/mb-wifi-latency.sh wlan0
+
+[Install]
+WantedBy=sys-subsystem-net-devices-wlan0.device

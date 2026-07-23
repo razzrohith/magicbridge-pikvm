@@ -239,6 +239,9 @@ phase6_enable() {
   # Realistic-defaults boot service (idempotent: keeps stable per-unit hostname + MAC).
   run "chmod +x '$INSTALL_ROOT/provision/mb-anon-defaults.sh' 2>/dev/null || true"
   [ -f /etc/systemd/system/mb-anon-defaults.service ] && run "systemctl enable mb-anon-defaults.service 2>/dev/null || true"
+  # Wi-Fi power-save off (KVM latency/jitter) — enable + apply now.
+  run "chmod +x '$INSTALL_ROOT/provision/mb-wifi-latency.sh' 2>/dev/null || true"
+  [ -f /etc/systemd/system/mb-wifi-latency.service ] && run "systemctl enable --now mb-wifi-latency.service 2>/dev/null || true"
   run "systemctl try-restart kvmd || true"
   run "systemctl restart kvmd-oled 2>/dev/null || true"
   ok "MagicBridge enabled"
