@@ -1393,24 +1393,47 @@ function dot(cls,txt){
 const $s=document.getElementById('stream');
 const $ns=document.getElementById('nosig');
 let _frameLoadTimes=[];
+// Shared stream-state overlay control. The #nosig overlay defaults to display:flex
+// (covers the video) and used to be hidden ONLY by onLoad() on the MJPEG path — so
+// on the WebRTC path it stayed up, covering the live H.264 video with "No Signal".
+// These are called from BOTH transports so the overlay always reflects reality.
+function _streamLive(){
+  $ns.style.display='none';
+  document.getElementById('bd-stream').className='bd ok';
+  document.getElementById('bv-stream').textContent='Live';
+  document.getElementById('s-stream').textContent='Live';
+  document.getElementById('s-stream').className='sv ok';
+}
+function _streamNoSignal(){
+  const h=$ns.querySelector('.nsh'), pp=$ns.querySelector('.nsp');
+  if(h) h.textContent='No Signal';
+  if(pp) pp.textContent='Connect HDMI from PC to capture card. Check ustreamer is running.';
+  $ns.style.display='flex';
+}
+// While WebRTC negotiates + the h264 sink cold-starts (a few seconds on the first
+// client), the <video> is legitimately black — show "Connecting…" instead of a
+// misleading "No Signal" or a bare black rectangle.
+function _streamConnecting(){
+  const h=$ns.querySelector('.nsh'), pp=$ns.querySelector('.nsp');
+  if(h) h.textContent='Connecting…';
+  if(pp) pp.textContent='Negotiating WebRTC / starting the H.264 encoder…';
+  $ns.style.display='flex';
+  const s=document.getElementById('s-stream'); if(s){ s.textContent='Connecting…'; s.className='sv warn'; }
+}
 function onLoad(){
   // The MJPEG <img> keeps running in the background even while WebRTC is
   // the active/visible transport (see setVideoTransport) - its own
   // load/error events shouldn't overwrite the status pills that are
   // currently describing the WebRTC stream the user can actually see.
   if(typeof _activeTransport!=='undefined' && _activeTransport==='h264') return;
-  $ns.style.display='none';
-  document.getElementById('bd-stream').className='bd ok';
-  document.getElementById('bv-stream').textContent='Live';
-  document.getElementById('s-stream').textContent='Live';
-  document.getElementById('s-stream').className='sv ok';
+  _streamLive();
   // Video FPS is read from kvmd's own stream counters in refreshStatus() now —
   // reliable across browsers. The old per-<img>-load estimate lived here, but
   // Chrome never re-fires `load` for multipart MJPEG, so it read "—".
 }
 function onErr(){
   if(typeof _activeTransport!=='undefined' && _activeTransport==='h264') return;
-  $ns.style.display='flex';
+  _streamNoSignal();
   document.getElementById('bd-stream').className='bd err';
   document.getElementById('bv-stream').textContent='No signal';
   document.getElementById('s-stream').textContent='No signal';
@@ -1917,6 +1940,7 @@ function startWebRTC(){
     return;
   }
   stopWebRTC();
+  _streamConnecting();   // show "Connecting…" (not "No Signal") while negotiating
   // Give the whole attach/watch/jsep handshake a bounded amount of time.
   // If no video track has arrived by then (Janus not running, plugin not
   // loaded, ustreamer's h264-sink not actually feeding it, etc.), fall
@@ -1956,6 +1980,10 @@ function startWebRTC(){
             const vid = document.getElementById('webrtc-view');
             if(vid.srcObject === null) vid.srcObject = new MediaStream();
             vid.srcObject.addTrack(track.clone());
+            // The H.264 track is arriving — hide the "No Signal"/"Connecting…"
+            // overlay so it stops covering the live video (this was the black /
+            // "No signal"-over-working-video bug on the WebRTC path).
+            if(track.kind === 'video'){ _streamLive(); }
             // Audio track only shows up if the C790 has I2S audio wired +
             // Janus's audio block resolved a real ALSA device (see video.py
             // _sync_janus_audio_cfg). Reveal the unmute control only when
