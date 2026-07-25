@@ -1603,6 +1603,11 @@ function releaseAll(){
 // Keyboard
 document.addEventListener('keydown',e=>{
   if(!captured) return;
+  // Ignore OS key-repeat (DIY handoff #45): the browser fires keydown ~30x/s while a
+  // key is held. Send ONE keydown; the TARGET's own OS generates the repeat from the
+  // held HID key. Forwarding every repeat floods the WS and builds input latency
+  // behind the user. preventDefault so the browser also doesn't act on the repeat.
+  if(e.repeat){ e.preventDefault(); return; }
   // Esc: single tap is forwarded to the remote; hold ESC_HOLD_MS to exit control.
   if(e.code==='Escape'){
     e.preventDefault();
@@ -1672,26 +1677,44 @@ document.addEventListener('keyup',e=>{
 // real cursor); in absolute mode the real cursor is visible so it's off.
 let _mouseMode='relative';
 let _cx=0,_cy=0,_showOverlay=true;
+// Input coalescing (DIY handoff #45): our custom input JS bypasses kvmd's built-in
+// mouse-squash, so a fast drag or scroll would send one WS message per RAW event
+// (60-120+/s) and queue behind the user on a jittery link. Batch to ONE send per
+// animation frame — summed deltas (relative) / latest position (absolute) / summed
+// scroll with a kept remainder — so total movement is identical but the wire isn't
+// flooded. The local predictive dot still updates per-event (it's cheap + local).
+let _pRelDx=0,_pRelDy=0,_pAbs=null,_pSx=0,_pSy=0,_flushSched=false;
+function _flushInput(){
+  _flushSched=false;
+  if(!captured){ _pRelDx=_pRelDy=_pSx=_pSy=0; _pAbs=null; return; }
+  if(_mouseMode==='absolute'){
+    if(_pAbs){ send({type:'mousemove_abs',x:_pAbs.x,y:_pAbs.y}); _pAbs=null; }
+  } else if(_pRelDx||_pRelDy){
+    send({type:'mousemove',dx:_pRelDx,dy:_pRelDy}); _pRelDx=0; _pRelDy=0;
+  }
+  if(_pSx||_pSy){
+    const sx=Math.trunc(_pSx/30), sy=Math.trunc(_pSy/30);
+    if(sx||sy) send({type:'scroll',dx:sx,dy:sy});
+    _pSx-=sx*30; _pSy-=sy*30;   // keep sub-notch remainder so slow scrolls aren't lost
+  }
+}
+function _schedInput(){ if(!_flushSched){ _flushSched=true; requestAnimationFrame(_flushInput); } }
 document.addEventListener('mousemove',e=>{
   if(captured){
     if(_mouseMode==='absolute'){
-      // Map the real cursor position over the video to an absolute 0-32767
-      // coordinate. The remote cursor jumps straight to the matching spot -
-      // no drift, and you see your own cursor the whole time (fixes the
-      // "can't see the mouse moving" problem directly).
+      // Map the real cursor over the video to an absolute 0-32767 coord. The remote
+      // cursor jumps straight to the matching spot; you see your own cursor the whole
+      // time. Only the LATEST position per frame is sent (intermediate ones are moot).
       const r=$view.getBoundingClientRect();
       if(r.width>0 && r.height>0){
         const nx=(e.clientX-r.left)/r.width, ny=(e.clientY-r.top)/r.height;
-        if(nx>=0 && nx<=1 && ny>=0 && ny<=1){
-          send({type:'mousemove_abs',x:Math.round(nx*32767),y:Math.round(ny*32767)});
-        }
+        if(nx>=0 && nx<=1 && ny>=0 && ny<=1){ _pAbs={x:Math.round(nx*32767),y:Math.round(ny*32767)}; _schedInput(); }
       }
     } else {
-      send({type:'mousemove',dx:e.movementX,dy:e.movementY});
+      _pRelDx+=e.movementX; _pRelDy+=e.movementY; _schedInput();
       if(_showOverlay){
-        // Predictive local cursor: pointer lock hides the real one, so show a
-        // dot that moves instantly with your hand while the (laggy) remote
-        // cursor catches up. Re-centres on each capture.
+        // Predictive local cursor: pointer lock hides the real one, so show a dot
+        // that moves instantly with your hand while the (batched) remote catches up.
         const r=$view.getBoundingClientRect();
         _cx=Math.max(0,Math.min(r.width,_cx+e.movementX));
         _cy=Math.max(0,Math.min(r.height,_cy+e.movementY));
@@ -1711,7 +1734,7 @@ document.addEventListener('mouseup',e=>{ if(!captured) return; send({type:'mouse
 document.addEventListener('wheel',e=>{
   if(!captured) return;
   e.preventDefault();
-  send({type:'scroll',dx:Math.round(e.deltaX/30),dy:Math.round(e.deltaY/30)});
+  _pSx+=e.deltaX; _pSy+=e.deltaY; _schedInput();   // coalesced to one scroll/frame (#45)
 },{passive:false});
 document.addEventListener('contextmenu',e=>{ if(captured) e.preventDefault(); });
 
