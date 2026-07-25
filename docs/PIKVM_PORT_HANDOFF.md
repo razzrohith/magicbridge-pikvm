@@ -353,26 +353,6 @@ against your actual code first (`services/`, `provision/portal.py`, `nginx/`,
     `run_in_executor` wrapper for anything that can take more than a few hundred
     ms (network calls, package installs, `nmcli`/`iptables` batches). Cheap
     commands can stay inline.
-    **-> PiKVM 2026-07-22 (`3312a71`): APPLIED - confirmed present and worse than
-    described.** The worst blocker was `tailscale_install`: pacman (120s) plus a
-    `curl|sh` fallback (180s) = up to ~5 minutes of a completely dead KVM. Added
-    `sh_a()` (async `sh`) and `run_blocking()` (ONE executor hop for a whole batch,
-    so rw/ro windows and firewall/MAC sequences stay coherent in a single thread),
-    then routed the long work through them: tailscale install/up/down/funnel, the
-    iptables lockdown batch, MAC set/clear (interface down/up), wifi scan/connect,
-    the reverse-DNS client lookup (`gethostbyaddr` per peer - hangs for seconds),
-    ping/iw latency, git fetch, the whole update deploy, `kvmd-edidconf --apply`,
-    journalctl, VNC start/stop. Cheap local calls (git rev-parse, `systemctl
-    is-active`, `command -v`, chmod, sysfs echo) stay inline; an AST sweep confirms
-    only those remain. **Verified offline A/B against the REAL module** with `sh`
-    stubbed to a 2s command: before, a fast `/health` was blocked until t=6.00s
-    (loop frozen); after, it was served at t=0.21s while the slow command ran.
-    **HARDWARE-CONFIRMED 2026-07-22 @ 172.16.20.171 (HEAD `915c601`):** with a real
-    `wifi/scan` in flight (measured 2.05s), 8 concurrent `/health` probes returned in
-    <=0.043s each (median 3ms) - the sidecar's event loop stayed free under a genuine
-    multi-second admin command. (Architecture note: HID/video ride kvmd's own process,
-    not this sidecar, so what froze before was the whole `/mb/*` admin+status surface,
-    not literally the keyboard - i.e. less severe than DIY but real, and now fixed.)
 38. **Corrupt config must not silently reset auth to defaults** `[APPLIES - the
     load half only]` — your SAVE path is already correct: `mbcommon.py` writes
     `tmp` then `os.replace` with a `# atomic` comment and chmod 0600, so DIY's
@@ -384,28 +364,6 @@ against your actual code first (`services/`, `provision/portal.py`, `nginx/`,
     keep the corrupt file, log loudly, refuse to bootstrap over it. (Also worth
     adding: `fsync` the tmp file before `os.replace` - the rename is atomic but
     without fsync the contents aren't guaranteed on disk first.)
-    **-> PiKVM 2026-07-22 (`8fa4c27`): APPLIED - and the load half was worse here
-    than in DIY.** The save path was left alone (already correct). The load half:
-    `_read_json` swallowed ANY parse error -> `None`; `load_config` saw a non-dict ->
-    returned the caller's default `{}`; and `_check_pw` reads
-    `if not cfg.get("hash"): return True  # no gate configured -> open`. So a corrupt
-    `stealth_auth.json` did not reset the password to a default - **it removed the
-    stealth gate entirely**. A truncated file is exactly what a power cut during a
-    write produces, so that was a real path from an unlucky unplug to a wide-open
-    USB identity panel. Added `ConfigCorruptError`: a file that EXISTS but will not
-    parse (including zero-length) is no longer downgraded to "empty" - `load_config`
-    logs loudly and raises, and the bad file is deliberately left on disk so nothing
-    bootstraps over it. `_check_pw` and `lock_status` fail CLOSED (deny; never report
-    "no password set" merely because the config was unreadable). `save_config` now
-    fsyncs the tmp file and the directory around `os.replace`. **Verified offline
-    A/B:** before, zero-length / truncated / garbage configs all returned
-    access_granted=True (gate open) x3; after, all three denied, with a healthy
-    config still accepting the right password and rejecting the wrong one.
-    **HARDWARE-CONFIRMED 2026-07-22 @ .171:** dropped a zero-length, a truncated and a
-    garbage `stealth_auth.json` into the writable dir (which `load_config` reads first);
-    each gave `lock-status` HTTP 503 and a DENIED unlock (gate never opened); removing
-    it fell back cleanly to the pristine `/etc` default (`lock-status` 200). The `/etc`
-    default was never touched.
 39. **Verify USB identity writes actually took; never fire-and-forget**
     `[APPLIES - shared configfs core]` — you write the gadget identity under
     `/sys/kernel/config/usb_gadget/kvmd/...`. DIY found that swallowing configfs
@@ -417,28 +375,6 @@ against your actual code first (`services/`, `provision/portal.py`, `nginx/`,
     gadget didn't accept it. Related and worth re-checking: any unbind/rebind of
     the UDC must reattach in a `finally`, or a failure in between leaves the
     target with no keyboard/mouse.
-    **-> PiKVM 2026-07-22 (`37eaf68`): APPLIED, both halves.** (1) The write was
-    fire-and-forget: the panel reported "applied" purely from `systemctl start
-    kvmd-otg` returning 0, which does NOT prove the target enumerates our identity -
-    a silently-rejected override left the operator believing the device looked like
-    a Logitech receiver while the target still saw the old one. Added
-    `_live_gadget_strings()` (reads idVendor/idProduct + manufacturer/product/
-    serialnumber straight from configfs) and `verify_identity()`, comparing against
-    the SANITIZED values actually written; all four apply paths now run
-    `apply_identity()` = write -> rebuild -> READ BACK -> verify, returning
-    `ok = started AND verified` plus `live{}` and `mismatches[]` so the operator is
-    told exactly which field the gadget refused. (2) `rebuild_gadget` tears the
-    gadget down and only the `rc != 0` branch retried - any other failure path
-    returned with the target having NO keyboard/mouse. The sequence is now wrapped
-    so a `finally` always checks UDC binding and makes a last-ditch reattach, logging
-    loudly either way. **Verified offline against a simulated configfs, 5/5:** target
-    still on `PiKVM`/`Composite Device`/`CAFEBABE` -> 5 mismatches caught; serial
-    silently not applied -> caught; UDC empty -> caught; single wrong string ->
-    caught; all-match -> verified. **HARDWARE-CONFIRMED 2026-07-22 @ .171:** a live
-    `POST /serial/random` returned `ok=True, verified=True, mismatches=[]`; the new
-    serial actually landed in configfs and the readback matched it, the UDC stayed
-    bound (target keeps input), and the gadget remained a Logitech receiver - kvmd-otg
-    active throughout.
 40. **Image/deploy must strip EVERY per-unit secret, and `--verify` must check**
     `[APPLIES as a class - your secrets differ]` — DIY shipped a distributable
     image whose scrub was a strict subset of its first-boot secret-reset, so it
@@ -449,26 +385,6 @@ against your actual code first (`services/`, `provision/portal.py`, `nginx/`,
     units, saved WiFi, machine-ids, logs), make the image scrub a superset of
     your first-boot reset, and add an assertion per item so a leak FAILS the
     build instead of shipping.
-    **-> PiKVM 2026-07-22 (`9aa5e1c`): APPLIED as a class.** Enumerated what OUR
-    golden unit accumulates rather than copying DIY's list. Two real scrub gaps -
-    cleared by NEITHER the image nor the first-boot reset: **`macros.json`** (agent
-    macros are user-authored keystroke sequences, and a macro very often IS a typed
-    password) and **Tailscale beyond `tailscaled.state`** (backup state, derp cache,
-    per-node certs all survived). Both now stripped in both places. The core of the
-    item was the missing assertions: `--verify` checked only a subset, so a silently
-    failed strip would ship. Added one assertion per secret - runtime net/stealth/
-    stealth_auth/agent/macros JSONs absent, tailscale state (any variant) + certs
-    absent, totp.secret empty, no root bash history, hostname is the placeholder, no
-    saved WiFi `psk=`, plus content-level sweeps for a DuckDNS token and LLM API key
-    material anywhere in our dirs. **Deliberately still KEPT** (documented,
-    anonymity-neutral): `/etc/magicbridge/kvmd.json`, `stealth_auth.json` and kvmd's
-    `htpasswd` hold only SHARED documented defaults - identical on every unit, so
-    they cannot cross-link units, and an operator's own change lands in `/var/lib`,
-    which IS stripped. **Verified** by running the assertions against a deliberately
-    LEAKING fixture and a clean one: 8/9 fired on the leak, 0 on the clean image -
-    and the 9th (LLM key sweep) did NOT fire because `[A-Za-z0-9]` stops at the
-    hyphen in `sk-proj-...`; fixed the class and re-tested, now catching sk-proj /
-    sk-ant / sk- / AIza / xai with no false positives on benign config.
 
 ## Worth a one-line check (lower confidence)
 
@@ -478,59 +394,53 @@ against your actual code first (`services/`, `provision/portal.py`, `nginx/`,
     gates its streamer, so this is probably already fine for you, but your
     `nginx/magicbridge.conf` comment notes `/streamer` is deliberately left
     reachable for the cockpit - confirm that path still demands a session.
-    **-> PiKVM 2026-07-22: no bypass in our config (hardware confirm pending).**
-    Unlike DIY, we never proxy to ustreamer ourselves: `nginx/magicbridge.conf`
-    defines NO `/streamer` or `/snapshot` location at all - the only occurrence of
-    the word is the comment itself. Those paths are served entirely by kvmd's own
-    nginx config and its `auth_request` gate, which we neither override nor
-    duplicate, so DIY's "proxied straight past auth" bug structurally cannot exist
-    here. Still owed: the one-line hardware confirm (unauthenticated
-    `curl -k https://<unit>/streamer/stream` must NOT return video).
-    **HARDWARE-CONFIRMED 2026-07-22 @ .171:** unauthenticated `/streamer/stream` and
-    `/streamer/snapshot` both returned HTTP 401, while an authenticated `/api/info`
-    returned 200 - the streamer is session-gated.
 42. `[CHECK]` **Can re-running the installer drop your lockdown?** Your
     `MB_LOCKDOWN` dedicated-chain design is BETTER than DIY's (which inserted
     into INPUT directly and got flushed). But a flush of INPUT still removes the
     `-j MB_LOCKDOWN` jump even though the chain survives. `magic-install.sh`
     didn't obviously touch iptables, so this may be a non-issue - just confirm
     an installer re-run can't leave the jump missing while the chain looks fine.
-    **-> PiKVM 2026-07-22: installer concern N/A (evidence); found a REAL adjacent
-    bug and fixed it (`95eca92`).** N/A evidence: a repo-wide grep shows the only
-    iptables use outside the lockdown handler is `mb-portal.sh`, and it touches the
-    **nat** table only (`-t nat -A/-F PREROUTING` for the captive redirect) - it
-    never flushes filter INPUT - while `magic-install.sh` contains no iptables at
-    all. So an installer re-run cannot drop the `-j MB_LOCKDOWN` jump. **But** the
-    check surfaced the same failure family: `/mb/net/status` never returned
-    `lockdown` at all, so the UI toggle (which reads `s.lockdown`) always showed OFF
-    even right after enabling it; and nothing persists iptables across a reboot, so
-    after a reboot the chain AND jump are gone while the saved config still says
-    on - the user believes they are protected and they are not. `status` now probes
-    the live jump and reports `lockdown` (live truth), `lockdown_configured` and
-    `lockdown_drifted`. **Verified offline** with iptables stubbed: rules gone +
-    config on -> live=False/drifted=True; rules present -> live=True/drifted=False.
-    **HARDWARE-CONFIRMED 2026-07-22 @ .171:** enabled lockdown (live=True), then deleted
-    just the INPUT jump to mimic a reboot - `/status` reported
-    `live=False configured=True drifted=True`; full cleanup left no MB_LOCKDOWN rule and
-    :443 reachable. Deliberately NOT done: auto re-applying lockdown at boot - re-arming a firewall
-    untested could lock the operator out of the web UI if they run lockdown without
-    Tailscale. Needs hardware.
 43. `[CHECK]` **Login brute-force protection**, only if you have custom auth.
     DIY's per-IP delay used `asyncio.sleep`, so concurrent attempts all slept in
     PARALLEL - no real cost, and no lockout ever. If kvmd handles your auth,
     N/A.
-    **-> PiKVM 2026-07-22: N/A for the main login; our own gate is already correct
-    (evidence).** kvmd owns the main web auth (`POST /api/auth/login`), so DIY's
-    hand-rolled throttle does not apply - and an earlier round already established
-    that an nginx `limit_req` in front of it is inert in kvmd's context, so it was
-    honestly removed rather than shipped non-functional. The one piece of custom
-    auth we do own, the stealth-panel gate, does NOT have DIY's bug: it never calls
-    `asyncio.sleep`. It stores `locked_until` per IP and returns **429 immediately**
-    once the threshold is passed (`_LOCK_AFTER=5`, escalating 15s->30s->60s... capped
-    at 900s), so concurrent attempts all hit the same timestamp check and are all
-    rejected - there is no per-request sleep to run in parallel. Previously verified
-    on hardware (5 wrong attempts -> 429, and the correct password is refused during
-    the window).
+
+# Audit round (2026-07-25) — absolute-mouse + input (from DIY Pi-4B/C790)
+
+44. **Windows autoscroll/pan in ABSOLUTE mouse mode — PHYSICAL_MIN/MAX in the HID
+    report descriptor** `[VERIFY]`
+    — moving the cursor (no button/wheel) auto-scrolled Windows content because the
+    absolute-pointer descriptor declared PHYSICAL_MINIMUM/MAXIMUM (HID 0x36/0x46) on
+    X/Y, so Windows treated it as a digitizer/tablet and panned. DIY fix: remove
+    0x36/0x46 (keep logical min/max only). Reverses DIY's own earlier commit that
+    added them.
+    **→ PiKVM 2026-07-25 (`d8a4925`): N/A (we don't own the descriptor).** kvmd builds
+    our mouse HID descriptor (`mouse_output`); a repo-wide grep shows we override
+    NOTHING about it — no `0x36`/`0x46`, no `mouse_output`, no `report_descriptor` in
+    `kvmd-overrides/`, `provision/`, or `services/`. So we inherit kvmd's known-good
+    absolute descriptor (the very one DIY matched to fix their bug). No autoscroll
+    exposure unless a future kvmd override customizes the descriptor. ⏳ belt-and-
+    suspenders hardware confirm (dump the live descriptor, check for 0x36/0x46)
+    pending device access (NordVPN blocking the LAN).
+
+45. **Input-event flood / latency buildup — coalesce per frame + ignore OS
+    key-repeat** `[APPLIES — we have custom input JS]`
+    — one WS/HID event per raw browser event (wheel, mouse-move, and keydown on every
+    OS key-repeat ~30/s) builds a backlog that plays out behind the user = growing
+    latency. DIY framed this as "N/A if stock kvmd UI" — but **it applies to us**: our
+    cockpit is the DIY UI port, with its own input handlers that bridge JSON events to
+    kvmd's binary `/api/ws` (`web/index.html` ~L1347), bypassing kvmd web UI's
+    mouse-squash/key handling.
+    **→ PiKVM 2026-07-25 (`d8a4925`): FIXED, both halves.** (a) Regular keydowns
+    forwarded every OS repeat (only Esc/RightCtrl guarded it) — added
+    `if(e.repeat){ preventDefault; return; }`, so one keydown goes out and the TARGET's
+    OS generates the repeat from the held HID key. (b) `mousemove`/`wheel` sent one WS
+    message per raw event (60-120+/s) — now coalesced to one send per
+    `requestAnimationFrame`: summed deltas (relative), latest position (absolute),
+    summed scroll with a kept sub-notch remainder. Total movement identical; the local
+    predictive dot still updates per-event. ⏳ hands-on feel confirmation pending
+    device access. (Deliberately did NOT touch kvmd's own input path — only our
+    custom bridge layer.)
 
 ## Explicitly NOT for you — do not spend time on these
 
@@ -607,3 +517,27 @@ All DIY anonymity changes above were verified with a full offline checkup
 sweep, 61 checks green) — the designs are sound to port; only device-runtime
 behavior (NM keeping the cloned MAC, DHCP/IP, gadget enumeration) still needs
 on-hardware confirmation on each side.
+
+---
+
+# DIY reply to the V4-Mini handoff (2026-07-23)
+
+Each item checked on real Pi-4B + C790 hardware, not by reading code.
+
+| item | applies? | what changed | how verified |
+|---|---|---|---|
+| 1 desired_fps clean divisor | **YES (both)** | added `_clean_divisor_fps()` - snaps request to the largest integer divisor of the source refresh (50@60Hz→30); our EDID caps compliant sources at 50 so 50→50 stays 1:1 | 7-case unit test; a non-compliant iPad dongle presenting 60Hz was the real trigger seen here |
+| 2 Wi-Fi power-save | **YES** | `iw dev wlan0 set power_save off` live + NM drop-in `wifi.powersave=2` (persistent) + install.sh + iw pkg | `iw dev wlan0 get power_save` read **on** before, **off** after |
+| 3 C790 I2S audio + EDID | **N/A (already good)** | none | EDID dump shows an Audio Data Block `23 09 07 07` (LPCM 2ch 48kHz), not just the basic-audio flag; break-guard already present (videoWidth-poll fallback to MJPEG on a dead 0×0 track) |
+| 4 LAN-direct ICE, no STUN | **YES (C790/WebRTC)** | `iceServers: []` in the Janus constructor | grep-confirmed in deployed UI; janus.js constructor previously had no iceServers → defaulted to Google STUN |
+| 5a nosig over live video | **YES (C790)** | hide the "No signal" overlay when WebRTC frames arrive (videoWidth>0), not only on MJPEG onload | code path; was only hidden in the MJPEG onLoad handler |
+| 5b fps readout idle sink | **YES (C790)** | poll receiver `inbound-rtp.framesPerSecond` on the WebRTC path | was fed by MJPEG `<img>` onload times → stuck at "-" on WebRTC |
+| 5c jiggler style/interval | **N/A** | none | our JS sends `{style}` and backend reads `d.get("style")` - already consistent |
+| 5d quality Apply resilient | partial | bitrate/fps/quality already clamped + `is not None` guards; USB dongle supports resolution | left as-is; no failure observed on DIY |
+| 5e devices panel blank | **N/A** | none | panel is wired to `d.display` (shows DELL P2419H) |
+| 5f WebRTC not engaging on load | **N/A** | none | `applyStatus` calls `syncVideoTransport(s.mode)`; WebRTC engages from the first status poll (observed live) |
+| 6 gadget profile tells | **N/A (already clean)** | none | gadget exposes only hid.keyboard/mouse/aux as `046d:c52b` - no mass-storage, no CDC/serial |
+| Tailscale RO-rootfs | **N/A** | none | DIY rootfs is writable |
+| kvmd override.d | **N/A** | none | DIY doesn't run kvmd |
+
+DIY commit: `7b7a3e1`.
