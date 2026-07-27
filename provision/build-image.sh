@@ -218,6 +218,9 @@ if [[ "$MODE" == "verify" ]]; then
     # must actually be enabled (else re-arming an old base silently ships stale config).
     chk "kvmd override matches HEAD (video/msd fixes shipped)" 'cmp -s "$R/opt/magicbridge/kvmd-overrides/override.d/00-magicbridge.yaml" "$R/etc/kvmd/override.d/00-magicbridge.yaml"'
     chk "mb-wifi-latency ENABLED (wifi power-save fix active)" '[[ ! -f "$R/etc/systemd/system/mb-wifi-latency.service" ]] || [[ -L "$R/etc/systemd/system/sys-subsystem-net-devices-wlan0.device.wants/mb-wifi-latency.service" ]]'
+    # A non-executable mb-secret-reset makes first-boot skip ALL per-unit secret
+    # generation (no SSH keys / TLS cert) while still marking done — a bricked unit.
+    chk "provision scripts executable (mb-secret-reset +x)" '[[ -x "$R/opt/magicbridge/provision/mb-secret-reset.sh" && -x "$R/opt/magicbridge/provision/mb-firstboot.sh" ]]'
     if [[ -n "$MSDPART" ]]; then
         mount "$MSDPART" "$MNT/msd" 2>/dev/null || true
         chk "MSD has no uploaded images" '[[ -z "$(find "$MNT/msd" -maxdepth 1 -type f ! -name ".*" 2>/dev/null)" ]]'
@@ -248,7 +251,15 @@ if git -C "$R/opt/magicbridge" rev-parse >/dev/null 2>&1; then
         git -C "$R/opt/magicbridge" reset --hard HEAD -q 2>/dev/null   # at least make it clean
     fi
     git -C "$R/opt/magicbridge" clean -fdq 2>/dev/null   # drop __pycache__ + stray files
-    ok "baked repo at clean HEAD $(git -C "$R/opt/magicbridge" rev-parse --short HEAD 2>/dev/null) (fresh unit reports up-to-date)"
+    # DEFENSIVE (real bug seen on a flashed unit): git on Windows commits our shell
+    # scripts 0644 (core.fileMode=false), so this Linux reset yields NON-executable
+    # provision/*.sh. mb-firstboot's [ -x ] guard then silently skipped
+    # mb-secret-reset → the unit shipped with no SSH host keys / TLS cert / machine-id
+    # (dead web + SSH) while still marking first-boot done. Committed modes are now
+    # 0755, and mb-firstboot guards on -f; force +x here too so a stale tree can't
+    # reintroduce it.
+    find "$R/opt/magicbridge" -name '*.sh' -exec chmod +x {} \; 2>/dev/null
+    ok "baked repo at clean HEAD $(git -C "$R/opt/magicbridge" rev-parse --short HEAD 2>/dev/null) (fresh unit reports up-to-date; scripts +x)"
 else
     warn "no git tree at /opt/magicbridge in the image - skipping repo-HEAD sync"
 fi

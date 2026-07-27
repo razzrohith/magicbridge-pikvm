@@ -33,7 +33,13 @@ mb_ro(){ command ro 2>/dev/null || mount -o remount,ro / ; }
 [ -x "$OLED" ] && "$OLED" "MagicBridge" "Please wait" "first-time setup" 2>/dev/null
 
 # 2. per-unit secrets (its own rw/ro handling)
-if [ -x "$ROOT/provision/mb-secret-reset.sh" ]; then
+# GUARD ON -f, NOT -x: we invoke via `bash "$script"`, so the execute bit is
+# irrelevant to running it. Guarding on -x was a latent trap — git on Windows
+# (core.fileMode=false) commits these scripts 0644, so a Linux `git reset` (image
+# build / align_pi) yields a NON-executable mb-secret-reset, [ -x ] then SKIPS it,
+# and the unit boots with NO SSH host keys / TLS cert / machine-id while first-boot
+# still marks itself done (permanently bricked web+SSH). -f can't be fooled that way.
+if [ -f "$ROOT/provision/mb-secret-reset.sh" ]; then
     echo "running mb-secret-reset"
     bash "$ROOT/provision/mb-secret-reset.sh"
 fi
