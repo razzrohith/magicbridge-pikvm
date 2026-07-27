@@ -14,21 +14,25 @@
 pushed; a batch of fixes is NOT yet deployed to the live unit — see the upgrade box.
 **How to update this file:** see the "Maintenance protocol" at the bottom.
 
-## 🔼 PENDING FULL UPGRADE — run when the device is reconnected (NordVPN off)
-Commits since the live unit was last deployed include structural changes (new systemd
-units, a tailscaled drop-in, the kvmd override) that a plain `git reset` does NOT
-apply — so a FULL upgrade is needed, not just `align_pi.py`. Steps:
+## 🔼 PENDING UPGRADE — run once when the device is reconnected (NordVPN off)
+The in-UI **Update button is now a complete updater** (`8004fcd`: installs drop-ins +
+enables new units), so going forward normal updates need no commands. BUT for THIS
+first catch-up — which itself lands the improved updater plus a big structural backlog
+— do a one-time full install so everything is guaranteed applied:
 1. `python align_pi.py` — git-resets /opt/magicbridge to origin/main + restarts
-   sidecars. It will FLAG that systemd/ + kvmd-overrides/ changed → do step 2.
+   sidecars (flags that systemd/ + kvmd-overrides/ changed → step 2).
 2. `ssh root@<ip> "bash /opt/magicbridge/magic-install.sh"` — installs the out-of-tree
    bits: mb-wifi-latency.service (+enable), tailscaled PST drop-in, the kvmd override
-   (msd disabled + desired_fps 30), and restarts kvmd/nginx/sidecars.
-3. **Reboot** — cleanest way to apply the USB-gadget change (mass-storage removed) and
-   kvmd streamer defaults, since kvmd-otg builds the gadget fresh at boot.
-4. Verify: services active; video comes up on **WebRTC** at 1080p; **audio** plays
-   after unmute (needs the source outputting HDMI audio); Tailscale status =
-   "Logged out" (ready to auth) not NoState; USB gadget = hid.usb0/1/2 only (no
-   mass_storage); jiggler/Devices panels populated.
+   (msd disabled + desired_fps 30), restarts kvmd/nginx/sidecars.
+3. **Reboot** — cleanest apply of the USB-gadget change (mass-storage removed) + kvmd
+   streamer defaults (kvmd-otg builds the gadget fresh at boot).
+4. Verify: services active; video on **WebRTC** 1080p; **audio** after unmute (source
+   must output HDMI audio); Tailscale = "Logged out" (ready to auth), not NoState; USB
+   gadget = hid.usb0/1/2 only (no mass_storage); jiggler/Devices panels populated.
+
+**After this catch-up, use the UI Update button** — it now handles code, config, unit
+drop-ins, and enabling new services on its own. (Only a USB-gadget/otg override change
+still wants a reboot to apply cleanly; the updater leaves that to boot on purpose.)
 
 Still owed AFTER the upgrade (need live hardware, can't do offline): the WebRTC
 auto-recovery induced-drop test (#47), the input-feel check (#45), and the abs-mouse
