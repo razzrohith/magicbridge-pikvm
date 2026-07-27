@@ -8,11 +8,32 @@
 > record each fix with its commit hash. If you're an AI assistant, keeping this current is part
 > of every task — not optional.
 
-**Last updated:** 2026-07-19
-**Repo HEAD:** `add6076` · github.com/razzrohith/magicbridge-pikvm
-**Device:** ONLINE @ `172.16.20.212` (DHCP moved it from .209), hostname
-`DESKTOP-LGA3O5H` (realistic, stable). All work below deployed + verified on-device.
+**Last updated:** 2026-07-26
+**Repo HEAD:** `35bd2ed` · github.com/razzrohith/magicbridge-pikvm (all pushed, tree clean)
+**Device:** OFFLINE to us (NordVPN blocking the LAN). Everything below is committed +
+pushed; a batch of fixes is NOT yet deployed to the live unit — see the upgrade box.
 **How to update this file:** see the "Maintenance protocol" at the bottom.
+
+## 🔼 PENDING FULL UPGRADE — run when the device is reconnected (NordVPN off)
+Commits since the live unit was last deployed include structural changes (new systemd
+units, a tailscaled drop-in, the kvmd override) that a plain `git reset` does NOT
+apply — so a FULL upgrade is needed, not just `align_pi.py`. Steps:
+1. `python align_pi.py` — git-resets /opt/magicbridge to origin/main + restarts
+   sidecars. It will FLAG that systemd/ + kvmd-overrides/ changed → do step 2.
+2. `ssh root@<ip> "bash /opt/magicbridge/magic-install.sh"` — installs the out-of-tree
+   bits: mb-wifi-latency.service (+enable), tailscaled PST drop-in, the kvmd override
+   (msd disabled + desired_fps 30), and restarts kvmd/nginx/sidecars.
+3. **Reboot** — cleanest way to apply the USB-gadget change (mass-storage removed) and
+   kvmd streamer defaults, since kvmd-otg builds the gadget fresh at boot.
+4. Verify: services active; video comes up on **WebRTC** at 1080p; **audio** plays
+   after unmute (needs the source outputting HDMI audio); Tailscale status =
+   "Logged out" (ready to auth) not NoState; USB gadget = hid.usb0/1/2 only (no
+   mass_storage); jiggler/Devices panels populated.
+
+Still owed AFTER the upgrade (need live hardware, can't do offline): the WebRTC
+auto-recovery induced-drop test (#47), the input-feel check (#45), and the abs-mouse
+descriptor dump (#44/46). The `video-latency-experiments` branch (WebRTC jitter-buffer
++ MJPEG flush-interval tunables) is deliberately OFF main — A/B on hardware before merge.
 
 ### 🎥🐛📦 DIY sync — capture-detect + installer bugfixes (handoff 8b / 5d / 20, 2026-07-19)
 - **8b capture auto-detect → SKIP (informational), device-verified.** V4 Mini is
