@@ -161,7 +161,27 @@ whatever ISO was on the MSD partition). Step 4 resolves both: zeroing the root f
 space overwrites the deleted-file remnants, and truncating the MSD region physically
 removes the ISO remnants along with it. Do step 4 before handing an image to anyone.
 
-## Status (2026-07-27)
+## Status (2026-07-27, second build — after the FIRST REAL FLASH TEST)
+The first flashed card **failed**, and diagnosing it found a run of bugs that every
+shipped unit would have hit. All are fixed (`a69b443`, `1c2c631`, `f3bc052`) and the
+image was rebuilt at HEAD `f3bc052`; **all 49 `--verify` checks pass**.
+
+What the flash test exposed (none of it reproducible without real hardware):
+| Bug | Effect |
+|---|---|
+| `provision/*.sh` committed `0644` (git `core.fileMode=false` on Windows) → `mb-firstboot`'s `[ -x ]` guard skipped `mb-secret-reset` | **Bricked**: no SSH host keys, no TLS cert, no machine-id — sshd + kvmd-nginx dead, yet first-boot marked itself done |
+| `mb-anon-defaults.sh` ended with an unconditional `ro` remount, inside `mb-firstboot`'s rw window | **Anonymity hole, 100% of units**: the realistic Dell EDID + branding silently no-opped (writes go to `/dev/null`), so units shipped with the golden image's baked EDID |
+| AP address assigned *before* `hostapd` (AP-mode switch takes the netdev down → kernel flushes IPv4) | Captive portal died with `Errno 99` **and** dnsmasq could not lease — a client joining `MagicBridge-Setup` got no IP and no page: **unprovisionable** |
+| `online()` demanded an ICMP reply from 1.1.1.1/8.8.8.8; 40s pre-AP wait | ICMP-blocking/internet-less LANs read as offline, and `setup_ap` then **stops wpa_supplicant + flushes the address**, destroying a working connection |
+| `portal.py` ran a live `iw scan` per HTTP GET on an AP-mode interface; no `country_code` (world regdomain) | The `brcmfmac ... reason -52` storm; AP knocked off channel, ~14s per page load |
+| Portal accepted any passphrase | One 6-char typo makes wpa_supplicant reject the **entire** config → permanent lockout |
+| `mb-anon-defaults.service` unordered vs `mb-firstboot.service` (both toggle rw/ro) | Race that independently reproduces the no-keys/no-cert brick |
+| `-F PREROUTING`, unmatched `pkill` pattern, `/boot` rewritten every ~13s, unconditional WiFi wipe on re-run, 900s cap during a 232GB online resize | Rule collateral damage, duplicate hostapd, FAT corruption on power-cut, owner's WiFi erased, `resize2fs` SIGTERM'd mid-resize |
+
+**Still not proven:** the *fixed* image has not itself been flash-tested. Flash one
+card and confirm the OLED → hotspot → WiFi → cockpit flow before shipping to anyone.
+
+## Status (2026-07-27, first build)
 - **Fresh HEAD-parity image built + verified.** `build-image.sh` arm now also
   re-deploys OUT-OF-TREE config (kvmd `override.d`, nginx block, all systemd
   drop-ins) and **enables** newly-added always-on units offline (target read from
