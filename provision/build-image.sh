@@ -214,6 +214,10 @@ if [[ "$MODE" == "verify" ]]; then
     chk "installed units all match repo (no stale .service)" 'for u in "$R"/opt/magicbridge/systemd/*.service; do cmp -s "$u" "$R/etc/systemd/system/$(basename "$u")" || exit 1; done'
     chk "mb-portal timeout NOT capped (26e: no mid-setup kill)" 'grep -qE "TimeoutStartSec=(infinity|0)\b" "$R/etc/systemd/system/mb-portal.service"'
     chk "wifi save REPLACES bad creds (26b: no stranding)" 'grep -q "REPLACE, never blind-append" "$R/opt/magicbridge/provision/mb-portal.sh"'
+    # image-parity: out-of-tree config must byte-match HEAD, and a new always-on unit
+    # must actually be enabled (else re-arming an old base silently ships stale config).
+    chk "kvmd override matches HEAD (video/msd fixes shipped)" 'cmp -s "$R/opt/magicbridge/kvmd-overrides/override.d/00-magicbridge.yaml" "$R/etc/kvmd/override.d/00-magicbridge.yaml"'
+    chk "mb-wifi-latency ENABLED (wifi power-save fix active)" '[[ ! -f "$R/etc/systemd/system/mb-wifi-latency.service" ]] || [[ -L "$R/etc/systemd/system/sys-subsystem-net-devices-wlan0.device.wants/mb-wifi-latency.service" ]]'
     if [[ -n "$MSDPART" ]]; then
         mount "$MSDPART" "$MNT/msd" 2>/dev/null || true
         chk "MSD has no uploaded images" '[[ -z "$(find "$MNT/msd" -maxdepth 1 -type f ! -name ".*" 2>/dev/null)" ]]'
@@ -267,6 +271,45 @@ if [[ -d "$R/opt/magicbridge/systemd" ]]; then
     fi
     ok "re-deployed all $_n repo unit files (item 27: no stale .service ships)"
 fi
+# IMAGE PARITY: the arm above git-syncs the tree + installs unit FILES, but the
+# golden card's OUT-OF-TREE config (/etc/kvmd override.d + our nginx block) and the
+# enable-state of any NEWLY-ADDED always-on unit are frozen at the golden card's
+# install time. Re-arming an OLD base would therefore ship stale video/msd config
+# and a shipped-but-disabled new unit. Re-deploy them from the now-HEAD tree so the
+# armed image matches HEAD — this mirrors the in-UI updater's _deploy_structural.
+RR="$R/opt/magicbridge"
+if [[ -f "$RR/kvmd-overrides/override.d/00-magicbridge.yaml" ]]; then
+    install -Dm644 "$RR/kvmd-overrides/override.d/00-magicbridge.yaml" \
+                   "$R/etc/kvmd/override.d/00-magicbridge.yaml"
+    ok "kvmd override refreshed from HEAD (desired_fps, msd disabled, …)"
+fi
+if [[ -f "$RR/nginx/magicbridge.conf" ]]; then
+    install -Dm644 "$RR/nginx/magicbridge.conf" "$R/etc/kvmd/nginx/magicbridge.conf"
+fi
+# ALL systemd drop-ins (generalises the tailscaled-only install above).
+for _d in "$RR"/systemd/*.service.d; do
+    [[ -d "$_d" ]] || continue; _b="$(basename "$_d")"
+    for _f in "$_d"/*.conf; do
+        [[ -e "$_f" ]] || continue
+        install -Dm644 "$_f" "$R/etc/systemd/system/$_b/$(basename "$_f")"
+    done
+done
+# ENABLE always-on units OFFLINE (create the WantedBy symlink) so a newly-added unit
+# like mb-wifi-latency ships ON without a manual install. Idempotent — a unit already
+# enabled on the golden card just gets the same symlink rewritten. Target is read from
+# each unit's [Install] WantedBy (mb-wifi-latency is WantedBy the wlan0 device, NOT
+# multi-user.target — so never hardcode the target here).
+for _u in mb-mdns-alias mb-anon-defaults mb-wifi-latency magicbridge-net magicbridge-stealth magicbridge-agent; do
+    _uf="$R/etc/systemd/system/$_u.service"
+    [[ -f "$_uf" ]] || continue
+    _wb="$(sed -n 's/^WantedBy=//p' "$_uf" | tr ' ' '\n' | grep -v '^$' || true)"
+    [[ -n "$_wb" ]] || _wb="multi-user.target"
+    for _t in $_wb; do
+        mkdir -p "$R/etc/systemd/system/$_t.wants"
+        ln -sf "../$_u.service" "$R/etc/systemd/system/$_t.wants/$_u.service"
+    done
+done
+ok "out-of-tree config refreshed + always-on units enabled (image parity with HEAD)"
 # ITEM 31: stamp the fully-deployed commit so a freshly-flashed unit reports
 # "up to date" (repo + units above ARE fully deployed here) instead of the
 # "deployment unverified -> reinstall" the updater shows when the stamp is absent.
