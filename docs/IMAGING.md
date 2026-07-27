@@ -147,8 +147,12 @@ power on
 ## Updates after install
 The GitHub-connected self-update already exists: cockpit **System → Apply update**
 (`/mb/net/update/apply` → `git fetch origin main && git reset --hard` on
-`/opt/magicbridge` + restart services), or `magic-install.sh --update`. Out-of-tree
-files (the login page) refresh via `--update`, not the in-UI button.
+`/opt/magicbridge` + restart services), or `magic-install.sh --update`. The in-UI
+button is now a **complete** upgrade — its structural step installs unit files,
+systemd **drop-ins** (`<unit>.service.d/*.conf`), the nginx block + kvmd override,
+and **enables** newly-added always-on units — so normal updates need no follow-up
+full install. (It deliberately does NOT rebuild the USB gadget; that waits for a
+reboot so it never drops the target's keyboard/mouse mid-session.)
 
 ## Residual data: why step 4 is not optional before distributing
 Deleting a file does **not** erase its blocks, so an armed-but-unshrunk image still
@@ -156,6 +160,18 @@ holds recoverable remnants (the golden unit's WiFi config, SSH host keys, logs �
 whatever ISO was on the MSD partition). Step 4 resolves both: zeroing the root free
 space overwrites the deleted-file remnants, and truncating the MSD region physically
 removes the ISO remnants along with it. Do step 4 before handing an image to anyone.
+
+## Status (2026-07-27)
+- **Fresh HEAD-parity image built + verified.** `build-image.sh` arm now also
+  re-deploys OUT-OF-TREE config (kvmd `override.d`, nginx block, all systemd
+  drop-ins) and **enables** newly-added always-on units offline (target read from
+  each unit's `WantedBy` — `mb-wifi-latency` binds the wlan0 device, not
+  multi-user). So re-arming even a stale base yields an image current for every
+  config/code change. Two new `--verify` assertions guard it (override byte-matches
+  HEAD; `mb-wifi-latency` enabled). Built `magicbridge-pikvm-dist.img` (6.7 GB) +
+  `.img.xz` (580 MB) from base `HEAD a41fe6b`; all 43 `--verify` checks pass on the
+  shrunk image; `xz -t` OK. **Not yet flash-tested on hardware** — validate one
+  card boot before shipping to a person.
 
 ## Status (2026-07-19)
 - `build-image.sh`: **built + run on a REAL card image.** A 29.72 GB read of the
