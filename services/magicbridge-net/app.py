@@ -679,19 +679,39 @@ def _write_stamp(sha):
 
 
 def _deploy_structural() -> bool:
-    """Install the structural bits (systemd units, nginx block, kvmd override) that a
-    plain `git reset` drops onto disk but never activates — mirrors magic-install
-    phase4/5 and build-image's self-heal. Idempotent; only called when structural
-    files actually changed. Returns True on success so the caller can withhold the
-    item-31 stamp if the install failed (else the stamp would falsely claim the
-    structural bits are live). `[ -f X ] && install` is set -e-safe: a missing
-    optional file skips (test is a non-final && term), a real install failure aborts."""
+    """Install + activate the structural bits that a plain `git reset` drops onto disk
+    but never wires up — so the in-UI "Update" button is a COMPLETE upgrade (no
+    magic-install needed for normal updates). Mirrors magic-install phase4/5/6.
+    Idempotent; only called when structural files actually changed. Returns True on
+    success so the caller withholds the item-31 stamp if the install failed.
+
+    Covers: (1) unit files, (2) systemd DROP-INS under <unit>.service.d/ (e.g. the
+    tailscaled PST-state fix), (3) the nginx block + kvmd override, (4) daemon-reload,
+    (5) enabling our always-on units so a NEWLY-added one (e.g. mb-wifi-latency) turns
+    on without a manual install. `[ -f X ] && cmd || true` is set -e-safe: a missing
+    optional file skips, a real install failure aborts (fails the deploy).
+
+    NOT done here (deliberately): rebuilding the USB gadget for an otg/msd override
+    change — that briefly drops the target's keyboard/mouse, so it's left to a reboot
+    (kvmd-otg builds the gadget fresh from the override at boot)."""
     rc, _out = sh("bash", "-c",
        'set -e; R=/opt/magicbridge; '
+       # 1. unit files
        'for u in "$R"/systemd/*.service; do [ -e "$u" ] && install -Dm644 "$u" "/etc/systemd/system/$(basename "$u")"; done; '
+       # 2. drop-ins: systemd/<unit>.service.d/*.conf -> /etc/systemd/system/<unit>.service.d/
+       'for d in "$R"/systemd/*.service.d; do [ -d "$d" ] || continue; b="$(basename "$d")"; '
+       '  for f in "$d"/*.conf; do [ -e "$f" ] && install -Dm644 "$f" "/etc/systemd/system/$b/$(basename "$f")"; done; done; '
+       # 3. nginx block + kvmd override
        '[ -f "$R/nginx/magicbridge.conf" ] && install -Dm644 "$R/nginx/magicbridge.conf" /etc/kvmd/nginx/magicbridge.conf; '
        '[ -f "$R/kvmd-overrides/override.d/00-magicbridge.yaml" ] && install -Dm644 "$R/kvmd-overrides/override.d/00-magicbridge.yaml" /etc/kvmd/override.d/00-magicbridge.yaml; '
-       'systemctl daemon-reload', timeout=60)
+       'systemctl daemon-reload; '
+       # 4. enable our always-on units (idempotent; picks up a NEW one like mb-wifi-latency).
+       #    First-boot/portal units are intentionally NOT touched here.
+       'for u in mb-wifi-latency mb-mdns-alias mb-anon-defaults magicbridge-net magicbridge-stealth magicbridge-agent; do '
+       '  { [ -f "/etc/systemd/system/$u.service" ] && systemctl enable "$u.service" >/dev/null 2>&1; } || true; done; '
+       # 5. start the Wi-Fi latency unit now so its fix applies without a reboot.
+       '{ [ -f /etc/systemd/system/mb-wifi-latency.service ] && systemctl start mb-wifi-latency.service >/dev/null 2>&1; } || true',
+       timeout=90)
     return rc == 0
 
 
