@@ -133,9 +133,37 @@ class H(BaseHTTPRequestHandler):
                 for s in scan_ssids()))))
 
 
+def _bind(timeout=45):
+    """Bind the portal socket, tolerating a not-yet-configured AP address.
+
+    REAL BUG (seen on the first flashed unit): mb-portal.sh starts hostapd/dnsmasq
+    and launches us immediately, but wlan0 does not carry 192.168.73.1 until the
+    kernel/hostapd finish bringing the AP up. Binding it right away raised
+    `OSError: [Errno 99] Cannot assign requested address`, portal.py exited in 0s,
+    and mb-portal backed off and retried — forever. Net effect: the setup hotspot
+    was broadcast but the captive page NEVER loaded, so a freshly-flashed unit
+    could not be provisioned at all.
+
+    So: retry until the AP address is assignable, then fall back to 0.0.0.0 rather
+    than dying. Falling back is safe here — during provisioning the AP is the only
+    live network, and dnsmasq/DNAT still steer clients to AP_IP:PORT.
+    """
+    import time
+    deadline = time.time() + timeout
+    while True:
+        try:
+            return ThreadingHTTPServer((AP_IP, PORT), H)
+        except OSError as e:
+            if time.time() >= deadline:
+                sys.stderr.write("portal: %s not bindable (%s) — falling back to 0.0.0.0\n" % (AP_IP, e))
+                sys.stderr.flush()
+                return ThreadingHTTPServer(("0.0.0.0", PORT), H)
+            time.sleep(1)
+
+
 def main():
     import time
-    srv = ThreadingHTTPServer((AP_IP, PORT), H)
+    srv = _bind()
     srv.timeout = 1
     # Wait indefinitely — the setup hotspot must stay up until someone submits
     # credentials. mb-portal.sh then verifies the connection and only exits the

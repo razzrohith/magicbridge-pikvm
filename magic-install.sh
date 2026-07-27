@@ -178,12 +178,19 @@ phase4_services() {
     [ -e "$unit" ] || continue
     run "install -Dm644 '$unit' \"/etc/systemd/system/$(basename "$unit")\""
   done
-  # Drop-in for upstream tailscaled: put its state on the writable PST partition
-  # (rootfs is read-only, so the default state dir fails). Harmless before tailscale
-  # is installed; picked up automatically when it is.
-  if [ -f "$INSTALL_ROOT/systemd/tailscaled.service.d/10-mb-pst-state.conf" ]; then
-    run "install -Dm644 '$INSTALL_ROOT/systemd/tailscaled.service.d/10-mb-pst-state.conf' /etc/systemd/system/tailscaled.service.d/10-mb-pst-state.conf"
-  fi
+  # ALL systemd drop-ins (systemd/<unit>.service.d/*.conf). Generic on purpose —
+  # this used to hardcode tailscaled's only, so every later drop-in (e.g. the
+  # wait-online timeout cap) silently never installed. Covers:
+  #   tailscaled.service.d               -> state on the writable PST partition
+  #   systemd-networkd-wait-online.d     -> cap the 120s networkless-boot stall
+  for dir in "$INSTALL_ROOT"/systemd/*.service.d; do
+    [ -d "$dir" ] || continue
+    base="$(basename "$dir")"
+    for conf in "$dir"/*.conf; do
+      [ -e "$conf" ] || continue
+      run "install -Dm644 '$conf' \"/etc/systemd/system/$base/$(basename "$conf")\""
+    done
+  done
   run "systemctl daemon-reload"
   ok "services + units installed"
 }
