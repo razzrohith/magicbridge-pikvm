@@ -1935,9 +1935,23 @@ async function applyVideo(){
 //      below catch a WebRTC failure and switch the UI back to MJPEG live,
 //      without waiting for a page reload or another status poll.
 let _janus = null, _janusHandle = null, _activeTransport = null, _webrtcTimeout = null, _videoInited = false, _rtcLivePoll = null;
+// WebRTC auto-recovery (DIY handoff #47): a mid-session ICE/WebRTC drop used to fall
+// back to MJPEG and STAY there for the whole session. _preferredTransport = what the
+// user actually chose (only manual selects change it); an auto-fallback keeps it so
+// we can climb back to H.264 on a cooldown, capped per session (reset on success).
+// _wrtcGen is a generation counter: stopWebRTC bumps it, each startWebRTC captures its
+// own gen, and the drop handlers ignore callbacks whose gen is stale — so our OWN
+// teardown (and any late callback from a superseded handle) can't fire a false drop.
+let _preferredTransport = 'h264', _wrtcRetries = 0, _wrtcRetryTimer = null, _wrtcGen = 0;
+const _WRTC_RETRY_MAX = 6, _WRTC_RETRY_MS = 8000;
 
 function setVideoTransport(mode){
   _activeTransport = mode;
+  // A manual/explicit selection sets the PREFERENCE and cancels any in-flight
+  // auto-recovery (don't fight a user who deliberately picked MJPEG).
+  _preferredTransport = mode;
+  clearTimeout(_wrtcRetryTimer);
+  _wrtcRetries = 0;
   const img = document.getElementById('stream');
   const vid = document.getElementById('webrtc-view');
   if(mode === 'h264'){
@@ -1961,28 +1975,54 @@ function setVideoTransport(mode){
 // Called whenever WebRTC can't actually be delivered client-side, even
 // though the dropdown/server said h264. Drops back to MJPEG and corrects
 // the dropdown so the UI reflects what's actually on screen.
-function _webrtcFallbackToMjpeg(reason){
+function _webrtcFallbackToMjpeg(reason, auto){
   console.warn('WebRTC unavailable, falling back to MJPEG:', reason);
   clearTimeout(_webrtcTimeout);
   stopWebrtcStats();
   stopWebRTC();
-  const sel = document.getElementById('sel-mode');
-  if(sel) sel.value = 'mjpeg';
   _activeTransport = 'mjpeg';
   document.getElementById('webrtc-view').style.display = 'none';
   document.getElementById('stream').style.display = '';
   retryStream();
-  toast('WebRTC unavailable - using MJPEG');
+  // Relabel the dropdown to MJPEG only on a terminal fallback (manual, or auto with
+  // no retries left). During auto-recovery keep the user's WebRTC preference showing.
+  const willRetry = auto && _preferredTransport === 'h264' && _wrtcRetries < _WRTC_RETRY_MAX;
+  const sel = document.getElementById('sel-mode');
+  if(sel && !willRetry) sel.value = 'mjpeg';
+  clearTimeout(_wrtcRetryTimer);
+  if(willRetry){
+    // Climb back toward H.264 on a cooldown (DIY #47), capped so a bad link can't
+    // thrash. The retry shows the video element again (visible so it decodes) with a
+    // brief "Connecting…"; on success the frame-poll swaps to H.264 and resets the
+    // budget, on failure we land back here for the next attempt until the cap.
+    _wrtcRetries++;
+    toast('WebRTC dropped — on MJPEG, retrying H.264 ('+_wrtcRetries+'/'+_WRTC_RETRY_MAX+')');
+    _wrtcRetryTimer = setTimeout(function(){
+      if(_preferredTransport !== 'h264') return;
+      const img=document.getElementById('stream'), vid=document.getElementById('webrtc-view');
+      img.style.display='none'; try{ img.removeAttribute('src'); }catch(e){}
+      vid.style.display='';
+      _activeTransport='h264';
+      startWebRTC(); startWebrtcStats();
+    }, _WRTC_RETRY_MS);
+  } else {
+    toast('WebRTC unavailable - using MJPEG');
+  }
 }
 
 function startWebRTC(){
+  clearTimeout(_wrtcRetryTimer);
   if(typeof Janus === 'undefined'){
     // janus.js not loaded (Janus not installed / vendor file missing yet).
-    _webrtcFallbackToMjpeg('janus.js not loaded');
+    _webrtcFallbackToMjpeg('janus.js not loaded', true);
     return;
   }
   stopWebRTC();
-  _streamConnecting();   // show "Connecting…" (not "No Signal") while negotiating
+  const _gen = ++_wrtcGen;   // this attempt's generation — the drop handlers below capture it
+  // Show "Connecting…" over the (visible) video element. A visible <video> reliably
+  // decodes; a hidden one (display:none) can be suspended by the browser and never
+  // report videoWidth, which would break the auto-recovery success check (#47).
+  _streamConnecting();
   // Give the whole attach/watch/jsep handshake a bounded amount of time.
   // If no video track has arrived by then (Janus not running, plugin not
   // loaded, ustreamer's h264-sink not actually feeding it, etc.), fall
@@ -1990,9 +2030,13 @@ function startWebRTC(){
   clearTimeout(_webrtcTimeout);
   _webrtcTimeout = setTimeout(()=>{
     // Fall back only if VIDEO genuinely isn't rendering (videoWidth still 0). Covers
-    // both "never connected" and "audio requested but absent -> dead 0x0 video track".
+    // "never connected", "audio requested but absent -> dead 0x0 track", and a failed
+    // background retry. Keyed on the PREFERENCE (active may be 'mjpeg' during a retry).
     const vid = document.getElementById('webrtc-view');
-    if(_activeTransport === 'h264' && (!vid || !vid.videoWidth)) _webrtcFallbackToMjpeg('no video frames (12s)');
+    // auto=false: "connected but no frames" is usually terminal (no HDMI signal / no
+    // host audio -> dead 0x0 track), NOT a transient drop — settle on MJPEG rather
+    // than loop retry/Connecting. Real mid-session drops retry via webrtcState/iceState.
+    if(_preferredTransport === 'h264' && (!vid || !vid.videoWidth)) _webrtcFallbackToMjpeg('no video frames (12s)', false);
   }, 12000);   // cold start: the FIRST client also spins up ustreamer's h264 sink
   // Callback names/shape below (onremotetrack + manual MediaStream assembly,
   // watch/start/jsep flow) match janus.js v1.0.0 specifically - that's the
@@ -2017,12 +2061,24 @@ function startWebRTC(){
             _janusHandle = handle;
             _sendWatch(1);
           },
+          // Mid-session drop detection (DIY #47): recover to H.264 on its own instead
+          // of freezing / staying on MJPEG until a page reload. Guarded by the gen
+          // check (ignore late callbacks from a superseded/torn-down handle) and
+          // _activeTransport==='h264' (only react when WebRTC was actually live).
+          webrtcState: function(on){
+            if(!on && _gen === _wrtcGen && _preferredTransport === 'h264' && _activeTransport === 'h264')
+              _webrtcFallbackToMjpeg('webrtc connection down', true);
+          },
+          iceState: function(state){
+            if(state === 'failed' && _gen === _wrtcGen && _preferredTransport === 'h264' && _activeTransport === 'h264')
+              _webrtcFallbackToMjpeg('ICE failed', true);
+          },
           onmessage: function(msg, jsep){
             if(jsep) _janusHandle.createAnswer({
               jsep: jsep,
               media: {audioSend: false, videoSend: false},
               success: function(answerJsep){ _janusHandle.send({message: {request: 'start'}, jsep: answerJsep}); },
-              error: function(err){ _webrtcFallbackToMjpeg('createAnswer error: '+err); }
+              error: function(err){ _webrtcFallbackToMjpeg('createAnswer error: '+err, true); }
             });
           },
           onremotetrack: function(track, mid, added){
@@ -2039,8 +2095,19 @@ function startWebRTC(){
             if(track.kind === 'video'){
               clearInterval(_rtcLivePoll);
               _rtcLivePoll = setInterval(function(){
-                if(_activeTransport !== 'h264'){ clearInterval(_rtcLivePoll); return; }
-                if(vid.videoWidth > 0){ clearInterval(_rtcLivePoll); clearTimeout(_webrtcTimeout); _streamLive(); }
+                if(_preferredTransport !== 'h264'){ clearInterval(_rtcLivePoll); return; }
+                if(vid.videoWidth > 0){
+                  clearInterval(_rtcLivePoll); clearTimeout(_webrtcTimeout);
+                  // Real frames are flowing — make WebRTC the VISIBLE transport. This also
+                  // completes a background auto-recovery (#47), where MJPEG was showing while
+                  // WebRTC re-negotiated: swap to H.264 seamlessly and reset the retry budget.
+                  _activeTransport = 'h264';
+                  const sel = document.getElementById('sel-mode'); if(sel) sel.value = 'h264';
+                  document.getElementById('stream').style.display = 'none';
+                  document.getElementById('webrtc-view').style.display = '';
+                  _wrtcRetries = 0;
+                  _streamLive();
+                }
               }, 400);
             }
             // Audio = the HDMI audio captured from the TC358743 (target->browser).
@@ -2052,10 +2119,10 @@ function startWebRTC(){
               document.getElementById('fh-audio-btn').style.display = '';
             }
           },
-          error: function(err){ _webrtcFallbackToMjpeg('plugin attach error: '+err); }
+          error: function(err){ _webrtcFallbackToMjpeg('plugin attach error: '+err, true); }
         });
       },
-      error: function(err){ _webrtcFallbackToMjpeg('janus connect error: '+err); }
+      error: function(err){ _webrtcFallbackToMjpeg('janus connect error: '+err, true); }
     });
   }});
 }
@@ -2075,7 +2142,7 @@ function _sendWatch(attemptsLeft){
     message: {request: 'watch', params: {orientation: 0, audio: true, mic: false, camera: false}},
     error: function(){
       if(attemptsLeft > 0) setTimeout(function(){ _sendWatch(attemptsLeft - 1); }, 1000);
-      else _webrtcFallbackToMjpeg('watch request failed after retries');
+      else _webrtcFallbackToMjpeg('watch request failed after retries', true);
     },
   });
 }
@@ -2125,6 +2192,7 @@ function initVideo(){
 }
 
 function stopWebRTC(){
+  _wrtcGen++;   // invalidate the current handle so its late webrtcState/iceState callbacks are ignored (#47)
   clearInterval(_rtcLivePoll); _rtcLivePoll = null;
   try{
     if(_janusHandle){ _janusHandle.hangup(); _janusHandle = null; }
