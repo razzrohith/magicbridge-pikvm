@@ -442,6 +442,45 @@ against your actual code first (`services/`, `provision/portal.py`, `nginx/`,
     device access. (Deliberately did NOT touch kvmd's own input path — only our
     custom bridge layer.)
 
+# Audit round (2026-07-26) — WebRTC recovery + input (from DIY Pi-4B/C790)
+
+46. **Absolute-mouse autoscroll on Windows = PHYSICAL_MIN/MAX in the HID
+    descriptor** `[VERIFY — repeat of 44]`
+    **→ PiKVM 2026-07-26: N/A (same as item 44).** We still override nothing about
+    kvmd's mouse HID descriptor (no `0x36`/`0x46`, `mouse_output`, or
+    `report_descriptor` anywhere in the tree), so we inherit kvmd's known-good
+    absolute descriptor. No autoscroll exposure. ⏳ live-descriptor dump still owed
+    once the device is reachable.
+
+47. **Don't get stranded on MJPEG after a transient WebRTC drop** `[CHECK — APPLIED]`
+    — a mid-session ICE/WebRTC drop fell back to MJPEG and STAYED there for the whole
+    session; DIY added auto-retry + janus iceState/webrtcState/oncleanup recovery.
+    **→ PiKVM 2026-07-26 (`a6e82f4`): APPLIED — we had the bug.** We do use kvmd's
+    native Janus, but through OUR own janus.js client in the ported UI, and it had
+    exactly this gap: `_webrtcFallbackToMjpeg` latched on MJPEG, and there were NO
+    `webrtcState`/`iceState` handlers, so a mid-session drop wasn't even detected
+    (frozen until reload). Added: `webrtcState`/`iceState` drop detection → fall back
+    to MJPEG then auto-retry H.264 on an 8s cooldown, capped 6/session, reset on
+    success; `_preferredTransport` so recovery never fights a manual MJPEG pick; a
+    `_wrtcGen` generation guard so our own teardown can't fire a false drop; the retry
+    runs foreground (a `display:none` `<video>` can be suspended and never report
+    `videoWidth`); and the 12s "no frames" timeout is TERMINAL (no-signal / no-audio,
+    not a transient drop → don't loop). ⏳ induced-drop hardware test owed (degrade
+    the link mid-stream, confirm it climbs back to H.264 on its own).
+
+48. **Coalesce streamed input; never forward OS key-repeat** `[PRINCIPLE — repeat of 45]`
+    **→ PiKVM 2026-07-26: already DONE (item 45, `d8a4925`).** Our custom input JS
+    already had this fixed last round — `if(e.repeat) return` on keydown, and
+    mouse-move/wheel coalesced to one send per animation frame (summed deltas / latest
+    abs position / scroll remainder). Nothing further to do.
+
+**FYI (noted, no action):** (a) **Pi 5 is a KVM downgrade** — BCM2712 dropped the
+hardware H.264 encoder (CPU-only), and TC358743 capture on Pi 5's RP1 stack drops
+frames; confirms staying on CM4 / Pi-4 silicon (what the V4 Mini uses). (b) On a weak
+Wi-Fi hop, **Tailscale is same-or-worse than LAN** for local control and may relay via
+DERP over the internet — reinforces our standing advice: **wire the Pi to an in-room
+AP / use Ethernet** for the lowest, most stable latency.
+
 ## Explicitly NOT for you — do not spend time on these
 
 - **Stuck keys / Right-Ctrl chord / release-on-focus-loss** — DIY's own
