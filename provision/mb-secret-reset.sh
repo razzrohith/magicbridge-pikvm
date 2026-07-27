@@ -12,8 +12,14 @@
 # ============================================================
 set +e
 info(){ echo "[$(date)] secret-reset: $*"; }
+# Same nested-caller rule as mb-anon-defaults: mb-firstboot invokes us inside its
+# own rw window, so only return / to read-only if WE made it writable. Otherwise
+# every later step in the caller silently fails on a read-only rootfs.
+_MB_WAS_RW=0
+case ",$(awk '$2=="/"{print $4; exit}' /proc/mounts 2>/dev/null)," in *,rw,*) _MB_WAS_RW=1 ;; esac
 mb_rw(){ command rw 2>/dev/null || mount -o remount,rw / ; }
-mb_ro(){ command ro 2>/dev/null || mount -o remount,ro / ; }
+mb_ro(){ [ "$_MB_WAS_RW" = 1 ] && return 0
+         command ro 2>/dev/null || mount -o remount,ro / ; }
 mb_rw
 
 # 1. SSH host keys — otherwise every unit shares one host identity.
@@ -69,9 +75,14 @@ if command -v kvmd-htpasswd >/dev/null 2>&1; then
         || printf 'magicbridge\n' | kvmd-htpasswd set -i magicbridge >/dev/null 2>&1
     kvmd-htpasswd del admin >/dev/null 2>&1 || true
 fi
+# mkdir first: every other missing-file case here is defended, but this one wasn't
+# — with /etc/magicbridge absent the write fails silently and all three sidecars
+# (magicbridge-net/-stealth/-agent) come up with NO kvmd API credentials.
+mkdir -p /etc/magicbridge 2>/dev/null
 printf '{\n  "user": "magicbridge",\n  "passwd": "magicbridge",\n  "base": "https://127.0.0.1/api"\n}\n' \
     > /etc/magicbridge/kvmd.json 2>/dev/null
 chmod 600 /etc/magicbridge/kvmd.json 2>/dev/null
+[ -s /etc/magicbridge/kvmd.json ] || info "WARNING: could not write /etc/magicbridge/kvmd.json"
 : > /etc/kvmd/totp.secret 2>/dev/null
 
 # 4b. kvmd's OTHER credential stores: ipmipasswd + vncpasswd. Both services ship
@@ -103,9 +114,20 @@ info "clearing USB identity override (serial regenerates)"
 rm -f /etc/kvmd/override.d/90-magicbridge-otg.yaml 2>/dev/null
 
 # 6. Saved WiFi + MAC persistence — provision fresh, don't join the builder's net.
-info "clearing saved WiFi + MAC persistence"
-printf 'ctrl_interface=/run/wpa_supplicant\nupdate_config=1\ncountry=US\n' \
-    > /etc/wpa_supplicant/wpa_supplicant-wlan0.conf 2>/dev/null
+# NEVER destroy WiFi the OWNER entered. build-image.sh already blanks this conf
+# offline, so a genuinely fresh flash reaches here with no saved network and the
+# wipe below is a no-op anyway. The dangerous case is a RE-RUN: if first-boot ever
+# repeats (marker write failed, TimeoutStartSec kill, power cut before the marker),
+# an unconditional wipe deletes the credentials the user just typed and drops the
+# unit back into the setup hotspot — the provisioning loop, on a unit the owner
+# already configured. Set MB_FORCE_WIPE=1 to force (mb-imageprep does its own wipe).
+if [ "${MB_FORCE_WIPE:-0}" = "1" ] || ! grep -q 'ssid=' /etc/wpa_supplicant/wpa_supplicant-wlan0.conf 2>/dev/null; then
+    info "clearing saved WiFi + MAC persistence"
+    printf 'ctrl_interface=/run/wpa_supplicant\nupdate_config=1\ncountry=US\n' \
+        > /etc/wpa_supplicant/wpa_supplicant-wlan0.conf 2>/dev/null
+else
+    info "KEEPING saved WiFi (already provisioned — refusing to strand the owner)"
+fi
 rm -f /etc/systemd/network/70-mb-*.link 2>/dev/null
 # Reset hostname to a placeholder tell so mb-anon-defaults regenerates a fresh
 # per-unit DESKTOP-XXXXXXX on this clone (the builder's name must not persist).

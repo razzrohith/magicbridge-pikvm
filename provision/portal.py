@@ -19,7 +19,28 @@ AP_IP, PORT, WIFI_FILE, TS_FILE = sys.argv[1], int(sys.argv[2]), sys.argv[3], sy
 _done = {"v": False}
 
 
+SSID_CACHE = "/run/mb-ssids"
+
+
 def scan_ssids():
+    """Return nearby SSIDs, WITHOUT touching the radio.
+
+    mb-portal.sh pre-scans while wlan0 is still in managed mode and writes the list
+    here. We used to run `wpa_cli scan` + `iw dev wlan0 scan` on EVERY HTTP GET —
+    an active off-channel scan on an interface that is now an ACCESS POINT, once per
+    request. Because dnsmasq answers every hostname with the AP address, each phone
+    fires several captive-portal probes at once, so several scans ran concurrently:
+    that is the brcmfmac `set chanspec ... fail, reason -52` storm, it knocked the AP
+    off channel 6 mid-page-load, and it added up to 14s (6s+8s timeouts) per request.
+    Falling back to a live scan only if the cache is missing keeps this robust.
+    """
+    try:
+        with open(SSID_CACHE) as f:
+            cached = [ln.strip() for ln in f if ln.strip()]
+        if cached:
+            return cached[:25]
+    except Exception:
+        pass
     ssids = []
     try:
         subprocess.run(["wpa_cli", "-i", "wlan0", "scan"], capture_output=True, timeout=6)
@@ -117,6 +138,23 @@ class H(BaseHTTPRequestHandler):
         # strip newlines to keep the line-based files clean
         ssid = ssid.replace("\n", "").replace("\r", "")
         psk = psk.replace("\n", "").replace("\r", "")
+        # Validate HERE, before mb-portal.sh can write it into wpa_supplicant.conf.
+        # wpa_supplicant rejects the WHOLE config file on a bad psk length, which
+        # stops it starting for every saved network — one typo permanently locks the
+        # owner out, and the retry appends to an already-unparsable file. Quotes and
+        # backslashes would break the quoted block the same way.
+        err = ""
+        if ssid and any(c in (ssid + psk) for c in ('"', "\\")):
+            err = "SSID and password cannot contain a quote (\") or backslash (\\)."
+        elif ssid and psk and not (8 <= len(psk) <= 63):
+            err = "Wi-Fi password must be 8-63 characters (yours is %d)." % len(psk)
+        if err:
+            self._send(PAGE.format(body=(
+                '<p style="color:#ff6b6b;font-size:13px;margin:0 0 10px">%s</p>' % html.escape(err)
+                + FORM.format(opts="".join(
+                    "<option value=\"%s\">%s</option>" % (html.escape(s), html.escape(s))
+                    for s in scan_ssids())))))
+            return
         if ssid:
             with open(WIFI_FILE, "w") as f:
                 f.write(ssid + "\n" + psk + "\n")

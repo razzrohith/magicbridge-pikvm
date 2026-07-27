@@ -50,6 +50,13 @@ mb_rw
 #    OUI via a networkd .link). mb-secret-reset just cleared these, so this
 #    generates fresh unique values for THIS unit; idempotent, so they then stay put.
 bash "$ROOT/provision/mb-anon-defaults.sh"
+# Belt-and-braces: the callee used to end with an unconditional `ro` remount, which
+# left EVERY step below silently failing on a read-only rootfs (the default Dell
+# EDID and branding never applied on any flashed unit — an anonymity hole that hit
+# 100% of units, invisibly, because both writes are redirected to /dev/null).
+# The helper is state-aware now; re-assert rw anyway so a future callee can't
+# re-introduce it.
+mb_rw
 
 # 4. realistic default monitor EDID identity (a real Dell), so the target never
 #    reads "MagicBridge"/"PiKVM"/a capture-card tell. Identity fields only.

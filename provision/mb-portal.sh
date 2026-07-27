@@ -33,20 +33,62 @@ echo "[$(date)] mb-portal starting"
 # /usr/bin/rw helper) and crashes the script mid-save.
 mb_rw(){ command rw 2>/dev/null || mount -o remount,rw / ; }
 mb_ro(){ command ro 2>/dev/null || mount -o remount,ro / ; }
-online(){ ip route 2>/dev/null | grep -q '^default' || return 1
-          ping -c1 -W2 1.1.1.1 >/dev/null 2>&1 || ping -c1 -W2 8.8.8.8 >/dev/null 2>&1; }
+# "Online" means we have a usable NETWORK — not necessarily public internet.
+# Requiring an ICMP reply from 1.1.1.1/8.8.8.8 was wrong: any network that blocks
+# outbound ICMP (most corporate / hotel / guest Wi-Fi) or simply has no internet
+# made a perfectly connected unit look offline. setup_ap then STOPS wpa_supplicant
+# and FLUSHES the address — actively destroying a working connection and stranding
+# the owner in the setup hotspot. A default route plus a real global address is the
+# correct test. The AP's own 192.168.73.1 and link-local 169.254.x must NOT count.
+online(){
+    ip route 2>/dev/null | grep -q '^default' || return 1
+    ip -4 -o addr show scope global 2>/dev/null \
+        | grep -vE "169\.254\.|${AP_IP//./\\.}" | grep -q . || return 1
+    return 0
+}
+
+# Give the saved network another chance without permanently sitting in AP mode.
+# Used between provisioning cycles: the router may merely have been slow or
+# rebooting, and previously nothing ever re-checked once we entered the AP loop.
+try_reconnect(){
+    teardown_ap
+    systemctl start "wpa_supplicant@${AP_IFACE}" 2>/dev/null
+    for _r in $(seq 1 6); do
+        sleep 5
+        online && return 0
+    done
+    return 1
+}
+
+# Scan for nearby SSIDs while the radio is STILL IN MANAGED MODE and cache the
+# list. portal.py used to shell out to `iw dev wlan0 scan` on every HTTP GET — an
+# active off-channel scan on an AP-mode interface, once per captive-portal probe.
+# That is the source of the brcmfmac "set chanspec ... fail, reason -52" storm, it
+# knocked the AP off channel mid-page-load, and it added up to 14s to every request.
+prescan_ssids(){
+    { iw dev "$AP_IFACE" scan 2>/dev/null | sed -n 's/^[[:space:]]*SSID: \(.\+\)$/\1/p' \
+        | awk 'NF && !seen[$0]++' | head -25; } > /run/mb-ssids 2>/dev/null
+    echo "[$(date)] pre-scanned $(wc -l < /run/mb-ssids 2>/dev/null || echo 0) SSIDs"
+}
 
 setup_ap(){
     systemctl stop "wpa_supplicant@${AP_IFACE}" 2>/dev/null
     systemctl stop wpa_supplicant 2>/dev/null
     rfkill unblock wifi 2>/dev/null   # a soft-blocked radio otherwise = a dead hotspot (DIY handoff #6)
+    # Set the regulatory domain explicitly. `country=US` lives only in the
+    # wpa_supplicant conf, and we just stopped wpa_supplicant — so nothing ever set
+    # the regdomain and the radio ran in the world domain ("00"), which marks
+    # channels NO_IR and cuts TX power. That is what turned every scan / IE update
+    # into the brcmfmac "reason -52" errors seen on the first flashed unit.
+    iw reg set US 2>/dev/null
     ip link set "$AP_IFACE" up
     ip addr flush dev "$AP_IFACE" 2>/dev/null
-    ip addr add "${AP_IP}/24" dev "$AP_IFACE"
     cat > /tmp/mb-hostapd.conf <<EOF
 interface=$AP_IFACE
 driver=nl80211
 ssid=$AP_SSID
+country_code=US
+ieee80211d=1
 hw_mode=g
 channel=6
 auth_algs=1
@@ -63,11 +105,31 @@ address=/#/$AP_IP
 no-resolv
 no-hosts
 EOF
-    pkill -f "hostapd /tmp/mb-hostapd" 2>/dev/null
+    # `-f` is a REGEX over the full command line, and the real one is
+    # "hostapd -B /tmp/mb-hostapd.conf" — the old literal "hostapd /tmp/mb-hostapd"
+    # could never match, so a stale hostapd survived and a SECOND one was launched
+    # on wlan0. The two then fought over the interface and the AP flapped or never
+    # enabled, leaving the unit unreachable.
+    pkill -f 'hostapd .*mb-hostapd' 2>/dev/null
     pkill -f "dnsmasq.*mb-dnsmasq" 2>/dev/null
     sleep 1
     hostapd -B /tmp/mb-hostapd.conf -P /tmp/mb-hostapd.pid
-    sleep 1
+    # Assign the AP address AFTER hostapd, and confirm it stuck. hostapd's nl80211
+    # init switches wlan0 from managed to AP mode, which takes the netdev DOWN — and
+    # Linux flushes every IPv4 address on NETDEV_DOWN. Adding it beforehand (as we
+    # did) meant 192.168.73.1 was GONE moments later: portal.py died with
+    # "[Errno 99] Cannot assign requested address", and dnsmasq — bind-dynamic with
+    # dhcp-range 192.168.73.x on an interface holding no address in that subnet —
+    # could not hand out leases either. A phone joining MagicBridge-Setup got no IP
+    # and no page: the hotspot looked alive but provisioning was impossible.
+    for _a in $(seq 1 20); do
+        ip -4 addr show dev "$AP_IFACE" 2>/dev/null | grep -q "$AP_IP" && break
+        ip addr add "${AP_IP}/24" dev "$AP_IFACE" 2>/dev/null
+        sleep 1
+    done
+    if ! ip -4 addr show dev "$AP_IFACE" 2>/dev/null | grep -q "$AP_IP"; then
+        echo "[$(date)] WARNING: $AP_IP never came up on $AP_IFACE — DHCP/portal will be degraded"
+    fi
     dnsmasq -C /tmp/mb-dnsmasq.conf --pid-file=/tmp/mb-dnsmasq.pid
     iptables -t nat -A PREROUTING -i "$AP_IFACE" -p tcp --dport 80  -j DNAT --to-destination "${AP_IP}:${PORT}" 2>/dev/null
     iptables -t nat -A PREROUTING -i "$AP_IFACE" -p tcp --dport 443 -j DNAT --to-destination "${AP_IP}:${PORT}" 2>/dev/null
@@ -76,8 +138,15 @@ EOF
 
 teardown_ap(){
     pkill -F /tmp/mb-hostapd.pid 2>/dev/null
+    pkill -f 'hostapd .*mb-hostapd' 2>/dev/null   # pidfile can be stale after an unclean exit
     pkill -F /tmp/mb-dnsmasq.pid 2>/dev/null
-    iptables -t nat -F PREROUTING 2>/dev/null
+    # Delete OUR two rules explicitly. `-F PREROUTING` flushed the whole chain,
+    # silently destroying any nat rule owned by kvmd, kvmd-otg, tailscale or a
+    # future feature — on every loop iteration and on every successful provision.
+    for _p in 80 443; do
+        iptables -t nat -D PREROUTING -i "$AP_IFACE" -p tcp --dport "$_p" \
+            -j DNAT --to-destination "${AP_IP}:${PORT}" 2>/dev/null
+    done
     ip addr flush dev "$AP_IFACE" 2>/dev/null
 }
 
@@ -85,6 +154,22 @@ save_wifi(){
     local SSID PASS
     SSID=$(sed -n '1p' "$WIFI_FILE"); PASS=$(sed -n '2p' "$WIFI_FILE")
     echo "[$(date)] saving WiFi '$SSID' (password ${#PASS} chars)"
+    # VALIDATE BEFORE WRITING. wpa_supplicant rejects the ENTIRE config file if any
+    # psk is outside 8..63 chars — so one mistyped short password doesn't just fail
+    # that network, it stops wpa_supplicant starting at all, for every saved network.
+    # The unit then has no WiFi, re-raises the hotspot, the user retypes, and each
+    # attempt appends to an already-unparsable file: a permanent lockout from a
+    # single typo. (magicbridge-net enforces >=8 already; the captive portal — the
+    # ONLY path a new owner has — enforced nothing.) Quotes/backslashes would
+    # likewise corrupt the block, since we write a quoted literal.
+    [ -n "$SSID" ] || { echo "[$(date)] REJECTED: empty SSID"; return 1; }
+    if [ -n "$PASS" ] && { [ "${#PASS}" -lt 8 ] || [ "${#PASS}" -gt 63 ]; }; then
+        echo "[$(date)] REJECTED: passphrase is ${#PASS} chars (WPA requires 8-63)"
+        return 1
+    fi
+    case "$SSID$PASS" in
+        *'"'*|*'\'*) echo "[$(date)] REJECTED: SSID/passphrase contains a quote or backslash"; return 1 ;;
+    esac
     mb_rw
     # ensure the conf has a usable header (harmless if it already does)
     if ! grep -q '^ctrl_interface=' "$WPA_CONF" 2>/dev/null; then
@@ -118,32 +203,77 @@ PY
     else
         printf '\nnetwork={\n\tssid="%s"\n\tkey_mgmt=NONE\n}\n' "$SSID" >> "$WPA_CONF"
     fi
+    # CONFIRM the credentials actually persisted before we reboot on the strength of
+    # them. mb_rw can fail (concurrent remount, missing /usr/bin/rw helper) and the
+    # append then vanishes silently — we rebooted anyway, came up with no WiFi, and
+    # the portal's own DONE page told the user "the password was wrong", sending
+    # them round an endless loop while typing the CORRECT password.
+    if ! grep -q "ssid=\"$SSID\"" "$WPA_CONF" 2>/dev/null; then
+        echo "[$(date)] SAVE FAILED — credentials did not persist (rootfs still read-only?)"
+        mb_ro
+        return 1
+    fi
+    # Guarantee WiFi actually comes up next boot. PiKVM ships wpa_supplicant@wlan0
+    # disabled by default; if an image is ever built from a base without the enable
+    # symlink, saved credentials would never be used and the unit would loop in the
+    # hotspot forever. Idempotent, and must run while / is still writable.
+    systemctl enable "wpa_supplicant@${AP_IFACE}" 2>/dev/null
     mb_ro
     echo "[$(date)] wpa conf now lists $(grep -c 'ssid=' "$WPA_CONF" 2>/dev/null) network(s)"
     # optional Tailscale auth key
     if [ -f "$TS_KEY" ]; then cp "$TS_KEY" /run/mb-tskey 2>/dev/null; fi
     rm -f "$WIFI_FILE" "$TS_KEY"
+    return 0
 }
 
 # ---------------- main ----------------
-# On boot, give any saved WiFi ~40s to associate + get DHCP before deciding to AP.
-for i in $(seq 1 8); do
+# On boot, give any saved WiFi up to ~90s to associate + get DHCP before deciding
+# to raise the AP. 40s was too short: cold-boot association plus DHCP on a busy
+# 2.4GHz band routinely takes 30-60s on brcmfmac. Timing out early is destructive,
+# not neutral — setup_ap stops wpa_supplicant and flushes the address, so a slow
+# but perfectly good connection was actively torn down and the owner was dumped
+# into the setup hotspot with their credentials already saved. Exactly what the
+# first flashed unit did.
+for i in $(seq 1 18); do
     sleep 5
     if online; then echo "[$(date)] network is up — nothing to do"; [ -x "$OLED" ] && "$OLED" --resume; exit 0; fi
 done
+echo "[$(date)] no network after 90s — entering provisioning"
 
 # No network -> provisioning. Keep the hotspot up until someone submits creds;
 # then save + reboot (a clean boot connects reliably). Wrong creds => next boot
 # has no network => hotspot returns, so this effectively retries until connected.
 _fastexits=0
+_cycles=0
 while true; do
+    # RECOVERY: before re-raising the AP, give the saved network another chance.
+    # Previously online() was never re-evaluated once we entered this loop, so a
+    # router that was merely slow or rebooting left the unit parked in AP mode
+    # forever — with wpa_supplicant stopped — even though it would have connected.
+    if [ "$_cycles" -gt 0 ] && try_reconnect; then
+        echo "[$(date)] network returned — leaving provisioning"
+        [ -x "$OLED" ] && "$OLED" --resume
+        exit 0
+    fi
+    _cycles=$(( _cycles + 1 ))
+    # Cache the SSID list while the radio is still in managed mode (see prescan_ssids).
+    prescan_ssids
     setup_ap
     [ -x "$OLED" ] && "$OLED" "WiFi setup needed" "Join hotspot:" "$AP_SSID"
     # Drop a Windows/macOS-readable report on the FAT boot partition each time the
     # hotspot comes up. If the AP or portal is broken, this is how a user with only
     # a card reader can see WHY (hostapd state, who holds :80, portal log) — the
     # ext4 logs are unreadable off-Pi. Best-effort; never blocks provisioning.
-    [ -f /opt/magicbridge/provision/mb-boot-report.sh ] && bash /opt/magicbridge/provision/mb-boot-report.sh hotspot-up 2>/dev/null
+    # RATE-LIMITED: writing it remounts the FAT /boot read-write and rewrites ~4KB.
+    # This ran on EVERY loop iteration — and in the portal-crash mode each iteration
+    # was ~13s, so /boot was being remounted+rewritten continuously and forever. A
+    # power cut inside one of those windows corrupts the boot partition and the unit
+    # stops booting at all; it is also pointless SD wear. First cycle, then 5-minutely.
+    _now=$(date +%s); _lastrep=$(cat /run/mb-lastreport 2>/dev/null || echo 0)
+    if [ "$_cycles" -le 1 ] || [ $(( _now - _lastrep )) -ge 300 ]; then
+        echo "$_now" > /run/mb-lastreport 2>/dev/null
+        [ -f /opt/magicbridge/provision/mb-boot-report.sh ] && bash /opt/magicbridge/provision/mb-boot-report.sh hotspot-up 2>/dev/null
+    fi
     echo "[$(date)] waiting for credentials (no timeout) ..."
     rm -f "$WIFI_FILE" "$TS_KEY"
     _pstart=$(date +%s)
@@ -156,9 +286,15 @@ while true; do
         # announce "Connected" prematurely and the AP always comes back on failure
         # — the failure mode DIY hit (AP torn down before confirming) can't happen.
         teardown_ap
-        save_wifi
-        echo "[$(date)] rebooting to connect ..."
-        sync; sleep 2; reboot; exit 0
+        # Only reboot if the credentials were valid AND actually persisted. We used
+        # to reboot unconditionally, so a rejected/lost save sent the user round the
+        # loop while the DONE page blamed their password.
+        if save_wifi; then
+            echo "[$(date)] rebooting to connect ..."
+            sync; sleep 2; reboot; exit 0
+        fi
+        echo "[$(date)] credentials rejected or not persisted — re-raising hotspot"
+        continue
     fi
     teardown_ap
     # Runaway guard (handoff 26d): if the portal EXITED IMMEDIATELY (crash / :8080

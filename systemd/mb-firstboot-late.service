@@ -13,7 +13,14 @@ ConditionPathExists=!/var/lib/magicbridge/.mb-firstboot-late-done
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/bin/bash /opt/magicbridge/provision/mb-firstboot-late.sh
-TimeoutStartSec=900
+# NO timeout. This unit grows the MSD filesystem ONLINE, and on a large card
+# (238 GB observed) resize2fs can run past any fixed cap on slow SD media. At 900s
+# systemd sent SIGTERM mid-resize — killing resize2fs part-way through an ext4
+# resize risks an inconsistent filesystem, and because the done-marker is written
+# after the resize it re-ran (and re-killed) on every subsequent boot. Nothing is
+# ordered after this unit (see the header comment), so an unbounded run cannot
+# block boot, WiFi provisioning, or the KVM.
+TimeoutStartSec=infinity
 
 [Install]
 WantedBy=multi-user.target

@@ -1,7 +1,15 @@
 [Unit]
 Description=MagicBridge realistic anonymity defaults (stable hostname + MAC)
 DefaultDependencies=no
-After=local-fs.target
+# MUST be ordered after mb-firstboot. Both units are DefaultDependencies=no /
+# After=local-fs.target / Before=sysinit.target with nothing between them, so
+# systemd ran them in PARALLEL — and both toggle the rootfs rw/ro. If this unit
+# finished (and remounted ro) while mb-firstboot's mb-secret-reset was mid
+# `ssh-keygen -A` / `openssl req`, the unit ended up with NO SSH host keys and NO
+# TLS cert while first-boot still wrote its done-marker: permanently dead sshd +
+# web UI, flagged "finalized". mb-firstboot invokes this same script itself, so
+# ordering after it loses nothing.
+After=local-fs.target mb-firstboot.service
 Before=network-pre.target systemd-networkd.service NetworkManager.service sysinit.target
 Wants=local-fs.target
 

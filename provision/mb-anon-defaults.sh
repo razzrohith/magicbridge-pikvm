@@ -21,8 +21,17 @@ set +e
 LINK=/etc/systemd/network/70-mb-wlan0.link
 [ -f /opt/magicbridge/branding/branding.env ] && . /opt/magicbridge/branding/branding.env 2>/dev/null
 
+# Remember whether / was ALREADY writable when we were entered. mb-firstboot.sh
+# calls this script BETWEEN its own mb_rw and its later writes, so unconditionally
+# remounting ro at the end left the CALLER running read-only — which silently
+# no-opped mb-firstboot's default-EDID and branding steps on EVERY flashed unit
+# (both are redirected to /dev/null, so it failed without a trace). Only drop back
+# to ro if we were the one who made it rw.
+_MB_WAS_RW=0
+case ",$(awk '$2=="/"{print $4; exit}' /proc/mounts 2>/dev/null)," in *,rw,*) _MB_WAS_RW=1 ;; esac
 mb_rw(){ command rw 2>/dev/null || mount -o remount,rw / ; }
-mb_ro(){ command ro 2>/dev/null || mount -o remount,ro / ; }
+mb_ro(){ [ "$_MB_WAS_RW" = 1 ] && return 0
+         command ro 2>/dev/null || mount -o remount,ro / ; }
 
 # A "tell" hostname is one that outs the device as a Pi/KVM/this product.
 _is_tell(){ case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in

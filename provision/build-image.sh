@@ -221,6 +221,15 @@ if [[ "$MODE" == "verify" ]]; then
     # A non-executable mb-secret-reset makes first-boot skip ALL per-unit secret
     # generation (no SSH keys / TLS cert) while still marking done — a bricked unit.
     chk "provision scripts executable (mb-secret-reset +x)" '[[ -x "$R/opt/magicbridge/provision/mb-secret-reset.sh" && -x "$R/opt/magicbridge/provision/mb-firstboot.sh" ]]'
+    # Without this the unit can never use the WiFi the owner enters -> hotspot loop.
+    chk "wpa_supplicant@wlan0 ENABLED (saved WiFi is usable)" '[[ -L "$R/etc/systemd/system/multi-user.target.wants/wpa_supplicant@wlan0.service" ]]'
+    # A nested unconditional `ro` remount silently no-opped first-boot's EDID+branding.
+    chk "rw/ro helpers are state-aware (EDID/branding not skipped)" 'grep -q "_MB_WAS_RW" "$R/opt/magicbridge/provision/mb-anon-defaults.sh" && grep -q "_MB_WAS_RW" "$R/opt/magicbridge/provision/mb-secret-reset.sh"'
+    # Parallel rw/ro toggling raced secret generation -> no SSH keys / no TLS cert.
+    chk "mb-anon-defaults ordered after mb-firstboot (no rw/ro race)" 'grep -qE "^After=.*mb-firstboot\.service" "$R/etc/systemd/system/mb-anon-defaults.service"'
+    # The captive portal must survive hostapd flushing the AP address (Errno 99).
+    chk "portal binds defensively (survives AP address flush)" 'grep -q "_bind" "$R/opt/magicbridge/provision/portal.py"'
+    chk "wait-online capped (no 120s networkless-boot stall)" '[[ -f "$R/etc/systemd/system/systemd-networkd-wait-online.service.d/10-mb-timeout.conf" ]]'
     if [[ -n "$MSDPART" ]]; then
         mount "$MSDPART" "$MNT/msd" 2>/dev/null || true
         chk "MSD has no uploaded images" '[[ -z "$(find "$MNT/msd" -maxdepth 1 -type f ! -name ".*" 2>/dev/null)" ]]'
@@ -310,6 +319,18 @@ done
 # enabled on the golden card just gets the same symlink rewritten. Target is read from
 # each unit's [Install] WantedBy (mb-wifi-latency is WantedBy the wlan0 device, NOT
 # multi-user.target — so never hardcode the target here).
+# wpa_supplicant@wlan0 must be enabled or saved credentials are never used and the
+# unit loops in the setup hotspot forever. It IS enabled on our golden card, but
+# nothing in our tooling guaranteed that — PiKVM ships it disabled, so a future base
+# built from stock would silently produce un-provisionable units. Templated unit:
+# enable it by hand into multi-user.target.wants (the [Install] section of
+# wpa_supplicant@.service targets that).
+if [[ -f "$R/usr/lib/systemd/system/wpa_supplicant@.service" ]]; then
+    mkdir -p "$R/etc/systemd/system/multi-user.target.wants"
+    ln -sf /usr/lib/systemd/system/wpa_supplicant@.service \
+           "$R/etc/systemd/system/multi-user.target.wants/wpa_supplicant@wlan0.service"
+    ok "wpa_supplicant@wlan0 enabled (saved WiFi will actually be used)"
+fi
 for _u in mb-mdns-alias mb-anon-defaults mb-wifi-latency magicbridge-net magicbridge-stealth magicbridge-agent; do
     _uf="$R/etc/systemd/system/$_u.service"
     [[ -f "$_uf" ]] || continue
