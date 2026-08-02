@@ -39,9 +39,13 @@ mb_ro(){ command ro 2>/dev/null || mount -o remount,ro / ; }
 # build / align_pi) yields a NON-executable mb-secret-reset, [ -x ] then SKIPS it,
 # and the unit boots with NO SSH host keys / TLS cert / machine-id while first-boot
 # still marks itself done (permanently bricked web+SSH). -f can't be fooled that way.
+SECRETS_OK=1
 if [ -f "$ROOT/provision/mb-secret-reset.sh" ]; then
     echo "running mb-secret-reset"
-    bash "$ROOT/provision/mb-secret-reset.sh"
+    bash "$ROOT/provision/mb-secret-reset.sh" || SECRETS_OK=0
+else
+    echo "ERROR: mb-secret-reset.sh missing — cannot personalize this unit"
+    SECRETS_OK=0
 fi
 
 mb_rw
@@ -90,8 +94,17 @@ python3 "$ROOT/branding/apply_branding.py" --root "$ROOT" >/dev/null 2>&1
 #    force rw, write the marker, verify it exists, and sync it to disk.
 mb_rw
 mkdir -p "$(dirname "$MARKER")" 2>/dev/null
-date > "$MARKER" 2>/dev/null
-[ -e "$MARKER" ] || echo "WARNING: failed to write first-boot marker $MARKER"
+if [ "$SECRETS_OK" = 1 ]; then
+    date > "$MARKER" 2>/dev/null
+    [ -e "$MARKER" ] || echo "WARNING: failed to write first-boot marker $MARKER"
+else
+    # FAIL-CLOSED: personalization did not complete, so do NOT look finalized.
+    # Leaving the marker unset costs one extra first-boot run; writing it would
+    # permanently ship a unit with a shared/absent identity (no SSH host keys, no
+    # TLS cert) that never retries — exactly the failure we shipped once already.
+    echo "SECRETS INCOMPLETE — marker deliberately NOT written; first-boot retries next boot"
+    [ -x "$OLED" ] && "$OLED" "Setup incomplete" "retrying on" "next reboot" 2>/dev/null
+fi
 sync
 
 mb_ro

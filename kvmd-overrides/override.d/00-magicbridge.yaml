@@ -48,6 +48,13 @@ otg:
     # exposes it. The Stealth panel can randomize this live.
     serial: "7A2F19C4"
 
+    # bMaxPower in the USB config descriptor — the TARGET parses this. kvmd's
+    # default (250 mA) is a composite-gadget value; a real Logitech Unifying
+    # Receiver draws ~98 mA, so the mismatch is a descriptor-level tell that
+    # contradicts the vendor/product IDs we present. kvmd writes this straight to
+    # the gadget's MaxPower (kvmd/apps/otg/__init__.py: _write(... "MaxPower")).
+    max_power: 98
+
     # NOTE: kvmd's `info/meta` is a PATH to a YAML file (default /etc/kvmd/meta.yaml),
     # NOT an inline content block. Setting it to a dict makes kvmd try to open the
     # dict-as-path and throw FileNotFoundError on every /api/info meta read. Our UI

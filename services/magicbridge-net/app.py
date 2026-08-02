@@ -116,9 +116,14 @@ def _iface_mac(iface):
 async def _lockdown_live() -> bool:
     """Is lockdown ACTUALLY in force right now? The MB_LOCKDOWN chain can survive while
     the `-j MB_LOCKDOWN` jump in INPUT does not, and nothing on this system persists
-    iptables across a reboot — so the jump is the only honest signal (item 42)."""
-    rc, _out = await sh_a("iptables", "-C", "INPUT", "-j", "MB_LOCKDOWN", timeout=6)
-    return rc == 0
+    iptables across a reboot — so the jump is the only honest signal (item 42).
+
+    BOTH families must be in force: nginx listens on IPv6 too, so a v4-only jump
+    leaves the surface open over v6. Report locked ONLY when both are present —
+    otherwise a half-applied firewall would show as a green "locked down"."""
+    rc4, _o4 = await sh_a("iptables", "-C", "INPUT", "-j", "MB_LOCKDOWN", timeout=6)
+    rc6, _o6 = await sh_a("ip6tables", "-C", "INPUT", "-j", "MB_LOCKDOWN", timeout=6)
+    return rc4 == 0 and rc6 == 0
 
 
 async def status(_):
@@ -272,18 +277,24 @@ def _lockdown_blocking(on: bool) -> None:
     rootfs rw/ro). Offloaded as ONE batch (item 37) — inline, this stalled every
     client's input for the whole sequence, and a half-applied firewall is worse than
     a slow one, so the batch must stay coherent in a single thread."""
-    sh("iptables", "-N", "MB_LOCKDOWN")
-    sh("iptables", "-F", "MB_LOCKDOWN")
-    if on:
-        for port in ("80", "443"):
-            sh("iptables", "-A", "MB_LOCKDOWN", "-i", "lo", "-p", "tcp", "--dport", port, "-j", "ACCEPT")
-            sh("iptables", "-A", "MB_LOCKDOWN", "-i", "tailscale0", "-p", "tcp", "--dport", port, "-j", "ACCEPT")
-            sh("iptables", "-A", "MB_LOCKDOWN", "-p", "tcp", "--dport", port, "-j", "DROP")
-        rc, _out = sh("iptables", "-C", "INPUT", "-j", "MB_LOCKDOWN")
-        if rc != 0:
-            sh("iptables", "-I", "INPUT", "1", "-j", "MB_LOCKDOWN")
-    else:
-        sh("iptables", "-D", "INPUT", "-j", "MB_LOCKDOWN")
+    # BOTH families. kvmd's nginx listens on IPv6 as well as IPv4
+    # (/etc/kvmd/nginx/nginx.conf.mako: `listen [${https_ipv6}]:${https_port} ssl`),
+    # and ip6tables INPUT defaults to ACCEPT — so an IPv4-only lockdown left the
+    # ENTIRE web surface reachable over IPv6. "Tailscale-only" was fully bypassable
+    # by connecting to the unit's v6 address. Every rule below is mirrored.
+    for ipt in ("iptables", "ip6tables"):
+        sh(ipt, "-N", "MB_LOCKDOWN")
+        sh(ipt, "-F", "MB_LOCKDOWN")
+        if on:
+            for port in ("80", "443"):
+                sh(ipt, "-A", "MB_LOCKDOWN", "-i", "lo", "-p", "tcp", "--dport", port, "-j", "ACCEPT")
+                sh(ipt, "-A", "MB_LOCKDOWN", "-i", "tailscale0", "-p", "tcp", "--dport", port, "-j", "ACCEPT")
+                sh(ipt, "-A", "MB_LOCKDOWN", "-p", "tcp", "--dport", port, "-j", "DROP")
+            rc, _out = sh(ipt, "-C", "INPUT", "-j", "MB_LOCKDOWN")
+            if rc != 0:
+                sh(ipt, "-I", "INPUT", "1", "-j", "MB_LOCKDOWN")
+        else:
+            sh(ipt, "-D", "INPUT", "-j", "MB_LOCKDOWN")
     cfg = load_config("net", {})
     cfg["lockdown"] = on
     save_config("net", cfg)

@@ -230,6 +230,18 @@ if [[ "$MODE" == "verify" ]]; then
     # The captive portal must survive hostapd flushing the AP address (Errno 99).
     chk "portal binds defensively (survives AP address flush)" 'grep -q "_bind" "$R/opt/magicbridge/provision/portal.py"'
     chk "wait-online capped (no 120s networkless-boot stall)" '[[ -f "$R/etc/systemd/system/systemd-networkd-wait-online.service.d/10-mb-timeout.conf" ]]'
+    # ---- clone-safety (DIY ship-readiness §1): a shared secret in the golden image
+    # is a master key into EVERY unit, so assert each strip rather than trusting it.
+    chk "no inherited USER ssh material (master-key risk)" '! ls "$R"/root/.ssh/* "$R"/home/*/.ssh/* >/dev/null 2>&1'
+    chk "no shared entropy seed"        '[[ ! -e "$R/var/lib/systemd/random-seed" ]]'
+    chk "no journal (builder history)"  '[[ ! -d "$R/var/log/journal" ]]'
+    chk "no stale credentials file on /boot" '[[ ! -e "$R/boot/magicbridge-credentials.txt" ]]'
+    chk "secret reset is FAIL-CLOSED (retries instead of shipping shared identity)" 'grep -q "SECRET RESET INCOMPLETE" "$R/opt/magicbridge/provision/mb-secret-reset.sh"'
+    chk "per-unit random web password (no baked shared default)" 'grep -q "MB_PW=" "$R/opt/magicbridge/provision/mb-secret-reset.sh"'
+    chk "TLS CN is per-unit, not a branded fleet beacon" '! grep -q "CN=magicbridge.local" "$R/opt/magicbridge/provision/mb-secret-reset.sh"'
+    chk "setup SSID de-branded (no over-the-air product name)" '! grep -q "AP_SSID=\"MagicBridge-Setup\"" "$R/opt/magicbridge/provision/mb-portal.sh"'
+    chk "USB bMaxPower matches impersonated device" 'grep -q "max_power" "$R/etc/kvmd/override.d/00-magicbridge.yaml"'
+    chk "lockdown covers IPv6 (nginx listens on ::)" 'grep -q "ip6tables" "$R/opt/magicbridge/services/magicbridge-net/app.py"'
     if [[ -n "$MSDPART" ]]; then
         mount "$MSDPART" "$MNT/msd" 2>/dev/null || true
         chk "MSD has no uploaded images" '[[ -z "$(find "$MNT/msd" -maxdepth 1 -type f ! -name ".*" 2>/dev/null)" ]]'
@@ -355,6 +367,15 @@ rm -f "$R"/var/log/wtmp* "$R"/var/log/btmp* "$R"/var/log/lastlog 2>/dev/null || 
 
 # 1. Host identity
 rm -f "$R"/etc/ssh/ssh_host_* 2>/dev/null || true
+# USER ssh material too, not just host keys. A private key or authorized_keys
+# inherited from the golden card would be a MASTER KEY into every clone, and
+# known_hosts cross-links them (it records what the builder connected to). The
+# directory is currently empty, but nothing stopped one `ssh` from the golden unit
+# baking a known_hosts in — so strip it structurally rather than trusting luck.
+rm -rf "$R"/root/.ssh "$R"/home/*/.ssh 2>/dev/null || true
+# Shared entropy seed / stale credential file must never ship either.
+rm -f "$R"/var/lib/systemd/random-seed "$R"/boot/magicbridge-credentials.txt 2>/dev/null || true
+rm -rf "$R"/var/log/journal 2>/dev/null || true
 rm -f "$R/var/lib/dbus/machine-id" 2>/dev/null || true
 : > "$R/etc/machine-id"
 

@@ -5,7 +5,7 @@ Imager** ("Use custom"), pop into a PiKVM V4 Mini, and get the full first-boot
 experience:
 
 1. OLED: **"MagicBridge · Please wait · first-time setup"** while it finalizes.
-2. OLED: **"WiFi setup needed · Join hotspot: MagicBridge-Setup"**.
+2. OLED: **"WiFi setup needed · Join hotspot: Setup-XXXX"** (per-unit, de-branded).
 3. User joins that hotspot, enters WiFi → device reboots and comes up normal.
 
 This device is **CM4 + microSD (no eMMC)**, so Imager writes the SD directly — no
@@ -23,7 +23,7 @@ This device is **CM4 + microSD (no eMMC)**, so Imager writes the SD directly —
 |---|---|
 | `provision/mb-firstboot.sh` + `systemd/mb-firstboot.service` | Runs **once** on a flashed card: OLED "please wait", regenerate SSH host keys + machine-id, clear baked-in state, re-apply branding, write the done-marker. |
 | `provision/mb-oled-msg` | Shows custom OLED text (pauses `kvmd-oled`, draws, `--resume` hands it back). |
-| `provision/mb-portal.sh` (+ `portal.py`) | If there's no network, raises the **MagicBridge-Setup** hotspot and sets the "join hotspot" OLED message; on connect, resumes the normal display. |
+| `provision/mb-portal.sh` (+ `portal.py`) | If there's no network, raises the per-unit **Setup-XXXX** hotspot and sets the "join hotspot" OLED message; on connect, resumes the normal display. |
 | `provision/mb-imageprep.sh` | Run on the **source** unit right before snapshotting — strips unique/secret state and re-arms first-boot. (Consumes the unit; the offline route below is preferred.) |
 | `provision/build-image.sh` | **Preferred.** Arms a `.img` **offline** on a Linux host: strips every per-unit secret, empties the MSD partition, re-arms first-boot into the correct systemd target. `--verify` re-mounts and asserts each strip took. The golden card is never modified, so it stays your backup. |
 
@@ -79,7 +79,10 @@ install of an OS build*), SSH host keys, `machine-id`, saved WiFi, Tailscale sta
 the spoofed-MAC `.link`, the USB-serial override, avahi `*.mb-bak` residual tells,
 logs + shell history.
 **Kept on purpose:** `/etc/magicbridge/kvmd.json` + `stealth_auth.json` — those are
-the documented *defaults* (`magicbridge` / `stealthbridge`), not per-unit secrets.
+the *fallback* stores. NOTE: as of the clone-safety pass both panel passwords are
+RANDOMIZED PER UNIT on first boot and written to `magicbridge-credentials.txt` on the
+FAT boot partition — no shared default ships. Read that file with a card reader (or
+after first login) and then delete it.
 
 **LUKS:** PiKVM does **not** use it (verified: empty `crypttab`, no dm-crypt, no
 `crypto_LUKS` partition). The script still **hard-fails** if it ever finds one,
@@ -139,7 +142,7 @@ cat /etc/machine-id
 power on
   └─ mb-firstboot (once):  OLED "MagicBridge · Please wait · first-time setup"
        new SSH keys · new machine-id · clean state · branding · (FS auto-expand)
-  └─ mb-portal (no WiFi):  OLED "WiFi setup needed · Join hotspot: MagicBridge-Setup"
+  └─ mb-portal (no WiFi):  OLED "WiFi setup needed · Join hotspot: Setup-XXXX"
        user joins hotspot → captive page → enters WiFi → save → reboot
   └─ reboot with WiFi:     kvmd-oled resumes → normal (hostname / IP / temp)
 ```

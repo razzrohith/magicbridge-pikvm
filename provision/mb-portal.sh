@@ -16,7 +16,15 @@
 set +e
 
 LOG="/run/mb-portal.log"
-AP_SSID="MagicBridge-Setup"
+# De-branded, per-unit setup SSID. "MagicBridge-Setup" beaconed the product name
+# over the air from the real Pi radio — anyone within range could identify the
+# device (and, with several clones, count the fleet) without touching the network.
+# "Setup-XXXX" is generic and unit-specific; the OLED shows this exact string, so
+# the owner always knows which network to join. Falls back if machine-id is absent.
+_apsuf="$(cut -c1-4 /etc/machine-id 2>/dev/null | tr 'a-f' 'A-F')"
+[ -n "$_apsuf" ] || _apsuf="$(tr -dc 'A-F0-9' </dev/urandom 2>/dev/null | head -c4)"
+[ -n "$_apsuf" ] || _apsuf="0001"
+AP_SSID="Setup-${_apsuf}"
 AP_IP="192.168.73.1"
 AP_IFACE="wlan0"
 PORT=8080

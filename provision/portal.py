@@ -109,7 +109,7 @@ FORM = """<div class=logo>M</div><h1>MagicBridge Setup</h1>
 DONE = """<div class=ok><div class=logo style="margin:0 auto 14px">M</div>
 <h1>Connecting…</h1><p class=sub>MagicBridge is saving <b>{ssid}</b> and restarting to join it —
 this takes about a minute. Rejoin your normal Wi-Fi and open <b>http://magicbridge.local/</b>.
-If the <b>MagicBridge-Setup</b> hotspot reappears, the password was wrong — reconnect and try again.</p></div>"""
+If the setup hotspot reappears, the password was wrong — reconnect and try again.</p></div>"""
 
 
 class H(BaseHTTPRequestHandler):
