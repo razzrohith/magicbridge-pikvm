@@ -238,7 +238,10 @@ if [[ "$MODE" == "verify" ]]; then
     chk "no stale credentials file on /boot" '[[ ! -e "$R/boot/magicbridge-credentials.txt" ]]'
     chk "secret reset is FAIL-CLOSED (retries instead of shipping shared identity)" 'grep -q "SECRET RESET INCOMPLETE" "$R/opt/magicbridge/provision/mb-secret-reset.sh"'
     chk "per-unit random web password (no baked shared default)" 'grep -q "MB_PW=" "$R/opt/magicbridge/provision/mb-secret-reset.sh"'
-    chk "TLS CN is per-unit, not a branded fleet beacon" '! grep -q "CN=magicbridge.local" "$R/opt/magicbridge/provision/mb-secret-reset.sh"'
+    # Strip comments before matching: the fix's own explanatory comment quotes the
+    # old branded subject, and a naive grep flagged that as a failure (it did — the
+    # code on the -subj line correctly uses ${_cn}). Assert on CODE only.
+    chk "TLS CN is per-unit, not a branded fleet beacon" '! grep -v "^[[:space:]]*#" "$R/opt/magicbridge/provision/mb-secret-reset.sh" | grep -q "CN=magicbridge.local"'
     chk "setup SSID de-branded (no over-the-air product name)" '! grep -q "AP_SSID=\"MagicBridge-Setup\"" "$R/opt/magicbridge/provision/mb-portal.sh"'
     chk "USB bMaxPower matches impersonated device" 'grep -q "max_power" "$R/etc/kvmd/override.d/00-magicbridge.yaml"'
     chk "lockdown covers IPv6 (nginx listens on ::)" 'grep -q "ip6tables" "$R/opt/magicbridge/services/magicbridge-net/app.py"'
