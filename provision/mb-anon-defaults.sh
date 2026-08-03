@@ -19,6 +19,11 @@
 # ============================================================
 set +e
 LINK=/etc/systemd/network/70-mb-wlan0.link
+# Wired NIC .link. The 70-mb-* prefix is load-bearing for CLONE SAFETY: every
+# per-unit reset globs 70-mb-*.link (mb-secret-reset.sh, build-image.sh,
+# mb-imageprep.sh), so this file is stripped from the golden image and each clone
+# regenerates its OWN wired MAC on first boot instead of sharing the builder's.
+ELINK=/etc/systemd/network/70-mb-eth.link
 [ -f /opt/magicbridge/branding/branding.env ] && . /opt/magicbridge/branding/branding.env 2>/dev/null
 
 # Remember whether / was ALREADY writable when we were entered. mb-firstboot.sh
@@ -67,6 +72,29 @@ if [ "${MB_MAC_AUTOSPOOF:-1}" = "1" ]; then
         echo "MAC: created stable default -> $mac (applies on next boot; systemd-networkd keeps it)"
     else
         echo "MAC: keeping existing default ($(grep -o 'MACAddress=.*' "$LINK" 2>/dev/null))"
+    fi
+
+    # ---- WIRED MAC: same treatment, or the Pi OUI leaks on every LAN cable ----
+    # Only wlan0 was ever spoofed, so plugging in ethernet broadcast the real
+    # Raspberry Pi OUI (dc:a6:32) in ARP/DHCP — an instant "this is a Pi", which
+    # defeats the whole model on any wired deployment.
+    #
+    # Matched by TYPE, not name: the port is eth0 on this image but Pi kernels also
+    # use end0, and a USB NIC gets yet another name — OriginalName=eth0 would
+    # silently match nothing there and keep leaking. Type=ether covers all of them.
+    # (lo is loopback and wlan0 is type wlan, so neither matches; tailscale0 is a
+    # tun. Nothing else on this build is type ether — we ship no USB ethernet
+    # gadget, since the target must only ever see keyboard + mouse.)
+    # Generated INDEPENDENTLY of wlan0 so the two NICs don't share an OUI/MAC.
+    if [ ! -f "$ELINK" ]; then
+        EOUIS=(18:03:73 34:17:eb f8:bc:12 3c:d9:2b 98:e7:f4 80:ce:62 \
+               3c:58:c2 34:41:5d a0:88:b4 e4:a4:71 78:bd:bc 8c:77:12)
+        eoui="${EOUIS[$((RANDOM % ${#EOUIS[@]}))]}"
+        emac="$(printf '%s:%02x:%02x:%02x' "$eoui" $((RANDOM % 256)) $((RANDOM % 256)) $((RANDOM % 256)))"
+        printf '[Match]\nType=ether\n\n[Link]\nMACAddressPolicy=none\nMACAddress=%s\n' "$emac" > "$ELINK"
+        echo "wired MAC: created stable default -> $emac (applies on next boot)"
+    else
+        echo "wired MAC: keeping existing default ($(grep -o 'MACAddress=.*' "$ELINK" 2>/dev/null))"
     fi
 else
     echo "MAC autospoof opted out"

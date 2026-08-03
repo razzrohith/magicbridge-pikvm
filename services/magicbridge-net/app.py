@@ -113,6 +113,36 @@ def _iface_mac(iface):
         return None
 
 
+def _wired_iface() -> str:
+    """Find the wired NIC by HARDWARE, never by guessing its name.
+
+    The old ("wlan0", "eth0") tuple silently missed real ports: Pi kernels with
+    predictable names call it end0, and a USB NIC gets something else entirely. On
+    those units /status reported no wired MAC at all and a manual spoof targeted an
+    interface that does not exist — so the wired Raspberry Pi OUI kept leaking with
+    the UI showing nothing wrong.
+
+    A physical wired port is the one that has a /device symlink (rules out lo, tun,
+    bridges and veth, which have none) and no wireless attributes.
+    """
+    base = "/sys/class/net"
+    try:
+        names = sorted(os.listdir(base))
+    except OSError:
+        return ""
+    for name in names:
+        if name == "lo":
+            continue
+        path = os.path.join(base, name)
+        # wireless: either a legacy /wireless dir or the modern phy80211 link
+        if os.path.isdir(os.path.join(path, "wireless")) or os.path.exists(os.path.join(path, "phy80211")):
+            continue
+        if not os.path.exists(os.path.join(path, "device")):
+            continue
+        return name
+    return ""
+
+
 async def _lockdown_live() -> bool:
     """Is lockdown ACTUALLY in force right now? The MB_LOCKDOWN chain can survive while
     the `-j MB_LOCKDOWN` jump in INPUT does not, and nothing on this system persists
@@ -138,8 +168,9 @@ async def status(_):
     # Report the LIVE MAC of the active interface (spoofed or not) so the System
     # page never shows a blank — the old code only surfaced a MAC if one had been
     # explicitly spoofed this session.
-    macs = {i: _iface_mac(i) for i in ("wlan0", "eth0") if _iface_mac(i)}
-    active_mac = macs.get("wlan0") or macs.get("eth0")
+    wired = _wired_iface()
+    macs = {i: _iface_mac(i) for i in ("wlan0", wired) if i and _iface_mac(i)}
+    active_mac = macs.get("wlan0") or (macs.get(wired) if wired else None)
     return web.json_response({
         "tailscale": {"up": ts_rc == 0, "raw": ts_out[:2000]},
         "duckdns": cfg.get("duckdns", {"enabled": False}),
@@ -371,6 +402,12 @@ async def mac_spoof(request):
     import random
     body = await request.json()
     iface = body.get("iface", "wlan0")
+    # Resolve a generic wired request to the ACTUAL port. A caller asking for
+    # "eth0"/"eth"/"wired" on a unit whose NIC is end0 (or a USB adapter) would
+    # otherwise write a .link for an interface that does not exist: the call
+    # reports success, and the real Pi OUI keeps leaking on the cable.
+    if iface in ("eth", "eth0", "wired"):
+        iface = _wired_iface() or iface
     if body.get("clear"):
         # drop persistence and restore the permanent hardware MAC
         perm = await run_blocking(_mac_clear_blocking, iface)

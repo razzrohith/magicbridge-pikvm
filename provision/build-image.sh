@@ -245,6 +245,9 @@ if [[ "$MODE" == "verify" ]]; then
     chk "setup SSID de-branded (no over-the-air product name)" '! grep -q "AP_SSID=\"MagicBridge-Setup\"" "$R/opt/magicbridge/provision/mb-portal.sh"'
     chk "USB bMaxPower matches impersonated device" 'grep -q "max_power" "$R/etc/kvmd/override.d/00-magicbridge.yaml"'
     chk "lockdown covers IPv6 (nginx listens on ::)" 'grep -q "ip6tables" "$R/opt/magicbridge/services/magicbridge-net/app.py"'
+    # Wired NIC must be spoofed too, or the real Pi OUI (dc:a6:32) leaks on cable.
+    chk "wired MAC spoof present (no Pi OUI on ethernet)" 'grep -q "70-mb-eth.link" "$R/opt/magicbridge/provision/mb-anon-defaults.sh"'
+    chk "wired NIC detected by hardware, not name guess" 'grep -q "_wired_iface" "$R/opt/magicbridge/services/magicbridge-net/app.py"'
     if [[ -n "$MSDPART" ]]; then
         mount "$MSDPART" "$MNT/msd" 2>/dev/null || true
         chk "MSD has no uploaded images" '[[ -z "$(find "$MNT/msd" -maxdepth 1 -type f ! -name ".*" 2>/dev/null)" ]]'
