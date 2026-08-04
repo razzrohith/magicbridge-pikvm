@@ -1368,7 +1368,16 @@ function connect(){
 }
 function ping(){}
 function _wsReady(){ return ws&&ws.readyState===1; }
-function _sKey(code,st){ if(!_wsReady())return; const b=ENC.encode('\x01\x00'+code); b[1]=st?1:0; ws.send(b); }
+// Track every key we've told the target is DOWN, so we can release them all on a
+// capture loss (see _releaseHeld). Single choke point for all live keydown/keyup.
+const _heldKeys = new Set();
+function _sKey(code,st){ if(!_wsReady())return; if(st) _heldKeys.add(code); else _heldKeys.delete(code); const b=ENC.encode('\x01\x00'+code); b[1]=st?1:0; ws.send(b); }
+// Release EVERY currently-held key. On a BROWSER-FORCED capture exit (pointer-lock
+// yanked by alt-tab / focus loss / the browser's own Esc), _setCaptured(false) fired
+// but released nothing — so any key the operator was holding stayed DOWN on the
+// target and auto-repeated for real (DIY 6.2). releaseAll() only ever released 4
+// modifiers. This releases arbitrary held keys, on every exit path.
+function _releaseHeld(){ if(!_heldKeys.size) return; [..._heldKeys].forEach(c=>_sKey(c,false)); _heldKeys.clear(); }
 function _sBtn(btn,st){ if(!_wsReady())return; const b=ENC.encode('\x02\x00'+btn); b[1]=st?1:0; ws.send(b); }
 function _sAbs(x,y){ if(!_wsReady())return; ws.send(new Uint8Array([3,(x>>8)&0xFF,x&0xFF,(y>>8)&0xFF,y&0xFF])); }
 function _sRel(dx,dy){ if(!_wsReady())return; ws.send(new Int8Array([4,0,dx,dy])); }
@@ -1555,6 +1564,7 @@ function _setCaptured(on){
     }
     clearTimeout(_escHoldTimer); _escDown=0;
     _intentional=false;
+    _releaseHeld();   // covers BOTH the forced pointer-lock loss and the intentional path (6.2)
     _kbUnlockAndMaybeExitFs();
     document.getElementById('cur-dot').style.display='none';
     setSidebarForControl(true);
@@ -1602,8 +1612,21 @@ function releaseAll(){
 }
 
 // Keyboard
+// True when focus is in an on-page editable field (paste box, macro/clip/SSID
+// inputs, selects). In ABSOLUTE mouse mode `captured` is true without pointer lock,
+// so without this guard every keystroke typed into such a field was BOTH forwarded
+// to the target AND preventDefault'd — the field received nothing and the target
+// got the operator's typing (DIY 6.1). Let the browser handle those keys normally.
+function _typingInField(e){
+  const el=e.target;
+  if(!el) return false;
+  if(el.isContentEditable) return true;
+  const t=el.tagName;
+  return t==='INPUT'||t==='TEXTAREA'||t==='SELECT';
+}
 document.addEventListener('keydown',e=>{
   if(!captured) return;
+  if(_typingInField(e)) return;
   // Ignore OS key-repeat (DIY handoff #45): the browser fires keydown ~30x/s while a
   // key is held. Send ONE keydown; the TARGET's own OS generates the repeat from the
   // held HID key. Forwarding every repeat floods the WS and builds input latency
@@ -1646,6 +1669,7 @@ document.addEventListener('keydown',e=>{
 
 document.addEventListener('keyup',e=>{
   if(!captured) return;
+  if(_typingInField(e)) return;   // mirror keydown: never forward a field's typing
   if(e.code==='Escape'){
     clearTimeout(_escHoldTimer);          // released before the hold fired = a tap
     _escDown=0;
@@ -2264,6 +2288,13 @@ function stopWebrtcStats(){ clearInterval(_rtcTimer); _rtcTimer=null; _rtcPrev=n
 function dispWinP(){send({type:'combo',codes:['MetaLeft','KeyP']});toast('Win+P →');}
 
 // Status
+// Complete HTML escaper (DIY 6.3). Escapes & < > " ' so a value is safe in BOTH
+// element text AND single- or double-quoted attributes. A quotes-only escaper is
+// XSS. This matters because several of these strings are ATTACKER-controlled, not
+// just user-authored: Wi-Fi SSIDs (anyone in RF range can broadcast an SSID like
+// `"><img src=x onerror=…>`) and the viewer User-Agent header both reach innerHTML.
+function _esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>(
+  {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function durShort(s){ return s>=3600?Math.floor(s/3600)+'h '+Math.floor(s%3600/60)+'m':s>=60?Math.floor(s/60)+'m':(s|0)+'s'; }
 function uaShort(ua){
   if(!ua) return 'device';
@@ -2290,8 +2321,8 @@ function applyStatus(d){
     const list=document.getElementById('ss-viewers');
     if(list){
       list.innerHTML = d.viewers.length
-        ? d.viewers.map(v=>'<div class="vw"><span class="vw-ip">'+v.ip+'</span>'
-            +'<span class="vw-dev">'+uaShort(v.ua)+'</span>'
+        ? d.viewers.map(v=>'<div class="vw"><span class="vw-ip">'+_esc(v.ip)+'</span>'
+            +'<span class="vw-dev">'+_esc(uaShort(v.ua))+'</span>'
             +'<span class="vw-dur">'+durShort(v.secs)+'</span></div>').join('')
         : '<div class="vw-none">no active connections</div>';
     }
@@ -2546,7 +2577,7 @@ async function wifiRefresh(){
     }
     list.innerHTML=d.networks.map(n=>{
       const isActive=n===active;
-      const esc=n.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');
+      const esc=_esc(n);   // was &/"/< only — missing > and ' (an SSID is attacker-supplied)
       return `<div data-net="${esc}" style="border:1px solid var(--border);border-radius:6px;margin-bottom:6px;overflow:hidden">
         <div style="display:flex;align-items:center;gap:6px;padding:7px 8px;background:${isActive?'rgba(0,200,100,.07)':'var(--surf2)'}">
           <div style="width:7px;height:7px;border-radius:50%;background:${isActive?'var(--green)':'var(--border)'};flex-shrink:0"></div>
@@ -3060,7 +3091,7 @@ function qa(k){if(_qa[k]) combo(_qa[k]);}
 let _clips=JSON.parse(localStorage.getItem('mb_clips')||'[]');
 function renderClips(){
   const el=document.getElementById('clips-list');if(!el)return;
-  el.innerHTML=_clips.length?_clips.map((c,i)=>`<div class="clip-item"><span class="clip-name" title="${c.text}">${c.name}</span><button class="clip-act" onclick="clipSend(${i})">Send</button><button class="clip-act clip-del" onclick="clipDel(${i})">✕</button></div>`).join(''):'<div style="font-size:10px;color:var(--muted);padding:4px 0">No clips saved</div>';
+  el.innerHTML=_clips.length?_clips.map((c,i)=>`<div class="clip-item"><span class="clip-name" title="${_esc(c.text)}">${_esc(c.name)}</span><button class="clip-act" onclick="clipSend(${i})">Send</button><button class="clip-act clip-del" onclick="clipDel(${i})">✕</button></div>`).join(''):'<div style="font-size:10px;color:var(--muted);padding:4px 0">No clips saved</div>';
 }
 function clipAdd(){const name=document.getElementById('clip-name').value.trim(),text=document.getElementById('clip-text').value;if(!name||!text){toast('Enter label + text');return;}_clips.push({name,text});localStorage.setItem('mb_clips',JSON.stringify(_clips));document.getElementById('clip-name').value='';document.getElementById('clip-text').value='';renderClips();toast('Clip saved ✓');}
 function clipDel(i){_clips.splice(i,1);localStorage.setItem('mb_clips',JSON.stringify(_clips));renderClips();}
@@ -3069,7 +3100,7 @@ async function clipSend(i){const sv=document.getElementById('speedsel').value;if
 let _macros=JSON.parse(localStorage.getItem('mb_macros')||'[]');
 function renderMacros(){
   const el=document.getElementById('macros-list');if(!el)return;
-  el.innerHTML=_macros.length?_macros.map((m,i)=>`<div class="clip-item"><span class="clip-name">${m.name}</span><button class="clip-act" onclick="macroRun(${i})">▶</button><button class="clip-act clip-del" onclick="macroDel(${i})">✕</button></div>`).join(''):'<div style="font-size:10px;color:var(--muted);padding:4px 0">No macros saved</div>';
+  el.innerHTML=_macros.length?_macros.map((m,i)=>`<div class="clip-item"><span class="clip-name">${_esc(m.name)}</span><button class="clip-act" onclick="macroRun(${i})">▶</button><button class="clip-act clip-del" onclick="macroDel(${i})">✕</button></div>`).join(''):'<div style="font-size:10px;color:var(--muted);padding:4px 0">No macros saved</div>';
 }
 function macroAdd(){const name=document.getElementById('macro-name').value.trim(),keys=document.getElementById('macro-keys').value.trim();if(!name||!keys){toast('Enter name + keys');return;}_macros.push({name,keys});localStorage.setItem('mb_macros',JSON.stringify(_macros));document.getElementById('macro-name').value='';document.getElementById('macro-keys').value='';renderMacros();toast('Macro saved ✓');}
 function macroDel(i){_macros.splice(i,1);localStorage.setItem('mb_macros',JSON.stringify(_macros));renderMacros();}
