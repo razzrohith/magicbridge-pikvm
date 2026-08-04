@@ -932,6 +932,8 @@ body:not(.fs) .fs-hud{display:none!important}
           <div class="srow"><span class="sk">Status</span><span class="sv" id="sys-avail">-</span></div>
           <div class="srow"><span class="sk">Commit</span><span class="sv" id="sys-ver" style="font-family:monospace;font-size:10px">-</span></div>
           <div class="srow"><span class="sk">Branch</span><span class="sv" id="sys-branch">-</span></div>
+          <!-- What's new (DIY D12): full-width so long summaries can't collide with a label -->
+          <div id="sys-whatsnew" style="display:none;font-size:11px;background:var(--surf2);border:1px solid var(--border);border-radius:4px;padding:8px 10px;margin:6px 0;max-height:160px;overflow:auto"></div>
           <div id="sys-update-out" style="display:none;font-size:10px;background:var(--surf2);border:1px solid var(--border);border-radius:4px;padding:6px;margin:6px 0;white-space:pre-wrap;max-height:120px;overflow:auto;font-family:monospace;color:var(--muted)"></div>
           <button class="sbtn" onclick="sysCheckVer()" style="margin-top:6px">↺ Check for updates</button>
           <button class="sbtn suc" id="sys-update-btn" onclick="sysUpdate()" style="margin-top:4px">⬆ Update now</button>
@@ -1284,7 +1286,7 @@ body:not(.fs) .fs-hud{display:none!important}
       if(m==='GET'){const s=await g('/mb/net/status');return J({enabled:!!(s&&s.lockdown)});}
       const r=await p('/mb/net/lockdown',{on:!!b.enabled});return J({ok:!!(r&&r.ok),enabled:!!b.enabled});}
     if(path==='/api/update'){
-      if(b.action==='status'){const s=(await g('/mb/net/update'))||{};return J({ok:true,update_available:!!s.update_available,commits_behind:s.commits_behind||0,changed:s.changed||0,mode:s.mode||'full',version:s.version||'',branch:s.branch||'main',updates:s.updates||0,detail:s.detail||''});}
+      if(b.action==='status'){const s=(await g('/mb/net/update'))||{};return J({ok:true,update_available:!!s.update_available,commits_behind:s.commits_behind||0,changed:s.changed||0,mode:s.mode||'full',version:s.version||'',branch:s.branch||'main',updates:s.updates||0,whatsnew:s.whatsnew||[],detail:s.detail||''});}
       if(b.action==='update'){const r=await p('/mb/net/update/apply');return J({ok:!!(r&&r.ok),out:(r&&r.detail)||''});}
       return J({ok:true});}
     if(path==='/api/ai/settings'){
@@ -2668,6 +2670,16 @@ async function sysCheckVer(){
       btn.disabled=false;
       btn.dataset.mode=d.mode||'full';
       const ud=document.getElementById('sys-dot-update'); if(ud) ud.className='sys-dot warn';
+      // What's new: one plain line per pending commit (prefix already stripped server-side)
+      const wn=document.getElementById('sys-whatsnew');
+      if(wn){
+        const items=Array.isArray(d.whatsnew)?d.whatsnew:[];
+        if(items.length){
+          wn.innerHTML='<div style="font-size:9px;letter-spacing:1px;text-transform:uppercase;color:var(--muted);margin-bottom:5px">What’s new</div>'
+            + items.map(t=>'<div style="display:flex;gap:6px;padding:2px 0;line-height:1.35"><span style="color:var(--accent)">•</span><span style="flex:1;min-width:0;word-break:break-word">'+_esc(t)+'</span></div>').join('');
+          wn.style.display='block';
+        } else { wn.style.display='none'; }
+      }
     }else{
       avail.textContent='Up to date';
       avail.className='sv ok';
@@ -2675,6 +2687,7 @@ async function sysCheckVer(){
       btn.classList.remove('pulse');
       btn.disabled=true;
       const ud=document.getElementById('sys-dot-update'); if(ud) ud.className='sys-dot ok';
+      const wn=document.getElementById('sys-whatsnew'); if(wn) wn.style.display='none';
     }
     const out=document.getElementById('sys-update-out');
     out.textContent=d.out||'';out.style.display=d.out?'block':'none';

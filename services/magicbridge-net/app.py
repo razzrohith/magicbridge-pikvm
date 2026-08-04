@@ -649,11 +649,22 @@ async def update_check(_):
     _rc, struct = sh("bash", "-c", "cd /opt/magicbridge && git diff --name-only %s..origin/main 2>/dev/null "
                      "| grep -cE '^(systemd/|nginx/|magic-install.sh|kvmd-overrides/)'" % base)
     is_struct = struct.strip().isdigit() and int(struct.strip()) > 0
+    # "What's new" (DIY D12): a plain one-line summary of EVERY pending commit, not
+    # just the latest, so the operator sees exactly what an update will bring. Strip
+    # the conventional-commit `type(scope):` prefix so it reads as plain English.
+    whatsnew = []
+    if n > 0:
+        _rc, log = sh("bash", "-c",
+                      "cd /opt/magicbridge && git log --no-merges --format=%%s %s..origin/main 2>/dev/null | head -40" % base)
+        for line in log.splitlines():
+            line = re.sub(r'^\s*[a-z]+(\([^)]*\))?!?:\s*', '', line.strip())
+            if line:
+                whatsnew.append(line)
     return web.json_response({"ok": True, "updates": n, "update_available": n > 0,
                               "commits_behind": n, "changed": nchanged,
                               "mode": ("full" if is_struct else "incremental"),
                               "version": cur.strip(), "deployed": base[:7], "branch": "main",
-                              "unverified": False,
+                              "unverified": False, "whatsnew": whatsnew,
                               "detail": ("%d update%s available" % (n, "" if n == 1 else "s")) if n else "up to date"})
 
 
