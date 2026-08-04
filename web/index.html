@@ -1310,7 +1310,8 @@ body:not(.fs) .fs-hud{display:none!important}
     return J({ok:false,error:'unmapped'},404);
   }
 })();
-function mbLogout(){ fetch('/api/auth/logout',{method:'POST',credentials:'include'}).finally(()=>{ location.href='/login/'; }); }
+function mbLogout(){ try{ stopWebRTC(); }catch(e){}   // hang up Janus BEFORE leaving, or ustreamer spins at 100% CPU (DIY B4)
+  fetch('/api/auth/logout',{method:'POST',credentials:'include'}).finally(()=>{ location.href='/login/'; }); }
 
 async function changeMainPassword(){
   const cur=document.getElementById('pw-current').value;
@@ -3309,6 +3310,30 @@ document.addEventListener('touchmove',e=>{
   $vkbd.style.bottom='auto';$vkbd.style.transform='none';
 },{passive:true});
 document.addEventListener('touchend',()=>{_dragging=false;$vkbd.style.transition='';});
+
+// --- WebRTC session teardown on tab-close / background / logout (DIY B4) --------
+// A Janus/WebRTC session that isn't hung up leaves ustreamer's capture thread
+// (us_p_vcap) spinning at ~100% CPU on the Pi *indefinitely* — a heat, power AND
+// anonymity problem (a device that runs hot / draws power with nobody watching is
+// itself a tell). stopWebRTC() already does a clean hangup()+destroy(), but it was
+// wired to nothing: closing the tab, backgrounding it, or logging out all left the
+// session live. kvmd's own UI hooks visibilitychange in stream.js; we replaced that
+// UI and dropped the teardown. All of this is target-invisible (browser<->Pi only).
+let _hideTeardown = null;
+// pagehide fires on real navigation/close where visibilitychange may not; keep it
+// synchronous there so the session is torn down before the page is gone.
+window.addEventListener('pagehide', ()=>{ try{ stopWebRTC(); }catch(e){} });
+document.addEventListener('visibilitychange', ()=>{
+  if(document.visibilityState === 'hidden'){
+    // Grace period: a quick tab-flick shouldn't drop the stream and force a costly
+    // renegotiate. Only tear down if it stays hidden ~10s (matches DIY).
+    if(!_hideTeardown) _hideTeardown = setTimeout(()=>{ _hideTeardown = null; try{ stopWebRTC(); }catch(e){} }, 10000);
+  } else {
+    if(_hideTeardown){ clearTimeout(_hideTeardown); _hideTeardown = null; }
+    // Came back after we tore down (handle gone) → bring the picture back.
+    if(!_janus && _preferredTransport === 'h264'){ try{ initVideo(); }catch(e){} }
+  }
+});
 
 // Init
 connect();
