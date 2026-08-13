@@ -57,12 +57,12 @@ if [[ "$MODE" == "shrink" ]]; then OUT="$IMG"; fi
 
 MNT=$(mktemp -d); LOOP=""
 cleanup(){
-    for m in "$MNT/msd" "$MNT/pst" "$MNT/root"; do mountpoint -q "$m" && umount "$m" 2>/dev/null || true; done
+    for m in "$MNT/boot" "$MNT/msd" "$MNT/pst" "$MNT/root"; do mountpoint -q "$m" && umount "$m" 2>/dev/null || true; done
     [[ -n "$LOOP" ]] && losetup -d "$LOOP" 2>/dev/null || true
     rm -rf "$MNT" 2>/dev/null || true
 }
 trap cleanup EXIT
-mkdir -p "$MNT/root" "$MNT/pst" "$MNT/msd"
+mkdir -p "$MNT/root" "$MNT/pst" "$MNT/msd" "$MNT/boot"
 
 info "Attaching image..."
 LOOP=$(losetup --show -fP "$OUT")
@@ -235,7 +235,13 @@ if [[ "$MODE" == "verify" ]]; then
     chk "no inherited USER ssh material (master-key risk)" '! ls "$R"/root/.ssh/* "$R"/home/*/.ssh/* >/dev/null 2>&1'
     chk "no shared entropy seed"        '[[ ! -e "$R/var/lib/systemd/random-seed" ]]'
     chk "no journal (builder history)"  '[[ ! -d "$R/var/log/journal" ]]'
-    chk "no stale credentials file on /boot" '[[ ! -e "$R/boot/magicbridge-credentials.txt" ]]'
+    # Check the REAL boot partition, not the root's empty /boot mountpoint (B1).
+    if [[ -n "$BOOTPART" ]]; then
+        mount -o ro "$BOOTPART" "$MNT/boot" 2>/dev/null || true
+        chk "no builder setup-report on PIBOOT (B1: no history leak)" '[[ ! -e "$MNT/boot/magicbridge-setup-report.txt" ]]'
+        chk "no credentials file on PIBOOT"                            '[[ ! -e "$MNT/boot/magicbridge-credentials.txt" ]]'
+        umount "$MNT/boot" 2>/dev/null || true
+    fi
     chk "secret reset is FAIL-CLOSED (retries instead of shipping shared identity)" 'grep -q "SECRET RESET INCOMPLETE" "$R/opt/magicbridge/provision/mb-secret-reset.sh"'
     chk "per-unit random web password (no baked shared default)" 'grep -q "MB_PW=" "$R/opt/magicbridge/provision/mb-secret-reset.sh"'
     # Strip comments before matching: the fix's own explanatory comment quotes the
@@ -396,8 +402,20 @@ rm -f "$R"/etc/ssh/ssh_host_* 2>/dev/null || true
 # baking a known_hosts in — so strip it structurally rather than trusting luck.
 rm -rf "$R"/root/.ssh "$R"/home/*/.ssh 2>/dev/null || true
 # Shared entropy seed / stale credential file must never ship either.
-rm -f "$R"/var/lib/systemd/random-seed "$R"/boot/magicbridge-credentials.txt 2>/dev/null || true
+rm -f "$R"/var/lib/systemd/random-seed 2>/dev/null || true
 rm -rf "$R"/var/log/journal 2>/dev/null || true
+# BUILDER HISTORY ON THE BOOT PARTITION (DIY B1). PIBOOT is a SEPARATE partition
+# ($BOOTPART / p1), not the root's empty /boot mountpoint — so removing
+# "$R/boot/..." above stripped NOTHING from the real files. If the golden card ever
+# booted through first-boot or the captive portal it wrote magicbridge-setup-report
+# .txt there (its own hostname / MAC / IP / git-HEAD), and mb-secret-reset writes a
+# per-unit magicbridge-credentials.txt there. Mount PIBOOT and delete both, so the
+# distributed .img never ships the builder's identity/usage history.
+if [[ -n "$BOOTPART" ]] && mount "$BOOTPART" "$MNT/boot" 2>/dev/null; then
+    rm -f "$MNT/boot/magicbridge-setup-report.txt" "$MNT/boot/magicbridge-credentials.txt" 2>/dev/null || true
+    sync; umount "$MNT/boot"
+    ok "PIBOOT cleaned (no builder setup-report / credentials ship)"
+fi
 rm -f "$R/var/lib/dbus/machine-id" 2>/dev/null || true
 : > "$R/etc/machine-id"
 
