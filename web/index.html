@@ -1466,6 +1466,13 @@ function onErr(){
 function retryStream(){ let p='/streamer/stream?key='+Math.random().toString(36).slice(2);
   if(/chrome|chromium|edg|crios/i.test(navigator.userAgent))p+='&advance_headers=1';
   else if(/safari|iphone|ipad/i.test(navigator.userAgent))p+='&dual_final_frames=1';
+  // Close the in-flight multipart/x-mixed-replace request FIRST (DIY A3). Just
+  // reassigning .src does NOT reliably tear down an open MJPEG reader, so each
+  // anti-stall retry opened ANOTHER ustreamer client — 7 measured on DIY, >100
+  // Mbit/s of duplicate 1080p that starved WebRTC into its own fallback (a death
+  // spiral) and showed as 164ms control latency. Verify via /api/streamer ->
+  // stream.clients returning to 1, not climbing.
+  try{ $s.removeAttribute('src'); }catch(e){}
   $s.src=p; _frameLoadTimes=[]; }
 
 // MJPEG-over-HTTP has no frame-dropping: TCP guarantees in-order delivery,
@@ -2063,8 +2070,11 @@ function startWebRTC(){
     // auto=false: "connected but no frames" is usually terminal (no HDMI signal / no
     // host audio -> dead 0x0 track), NOT a transient drop — settle on MJPEG rather
     // than loop retry/Connecting. Real mid-session drops retry via webrtcState/iceState.
-    if(_preferredTransport === 'h264' && (!vid || !vid.videoWidth)) _webrtcFallbackToMjpeg('no video frames (12s)', false);
-  }, 12000);   // cold start: the FIRST client also spins up ustreamer's h264 sink
+    if(_preferredTransport === 'h264' && (!vid || !vid.videoWidth)) _webrtcFallbackToMjpeg('no video frames (20s)', false);
+  }, 20000);   // cold start spins up ustreamer's h264 sink; and with tailscale0 now a
+               // valid ICE candidate (remote WebRTC), the browser legitimately needs
+               // longer to walk LAN + VPN + tailnet + 169.254 pairs to the good one —
+               // 12s tore down slow-but-healthy remote connects mid-negotiation (DIY A4).
   // Callback names/shape below (onremotetrack + manual MediaStream assembly,
   // watch/start/jsep flow) match janus.js v1.0.0 specifically - that's the
   // tag install_janus_webrtc.sh pins the server + this client library to,

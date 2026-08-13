@@ -248,6 +248,9 @@ if [[ "$MODE" == "verify" ]]; then
     # Wired NIC must be spoofed too, or the real Pi OUI (dc:a6:32) leaks on cable.
     chk "wired MAC spoof present (no Pi OUI on ethernet)" 'grep -q "70-mb-eth.link" "$R/opt/magicbridge/provision/mb-anon-defaults.sh"'
     chk "wired NIC detected by hardware, not name guess" 'grep -q "_wired_iface" "$R/opt/magicbridge/services/magicbridge-net/app.py"'
+    # A dead tailscale0 ICE candidate makes WebRTC fail to MJPEG forever (DIY A1).
+    chk "janus ICE ignores tailscale0 by default (WebRTC works on LAN)" 'grep -qE "ice_ignore_list\s*=\s*\"tailscale0\"" "$R/etc/kvmd/janus/janus.jcfg"'
+    chk "magicbridge-net tunes janus ICE by tailnet state" 'grep -q "_janus_ice_tune_blocking" "$R/opt/magicbridge/services/magicbridge-net/app.py"'
     if [[ -n "$MSDPART" ]]; then
         mount "$MSDPART" "$MNT/msd" 2>/dev/null || true
         chk "MSD has no uploaded images" '[[ -z "$(find "$MNT/msd" -maxdepth 1 -type f ! -name ".*" 2>/dev/null)" ]]'
@@ -316,6 +319,19 @@ fi
 # and a shipped-but-disabled new unit. Re-deploy them from the now-HEAD tree so the
 # armed image matches HEAD — this mirrors the in-UI updater's _deploy_structural.
 RR="$R/opt/magicbridge"
+# Bake the LAN-safe Janus ICE default (DIY A1): a fresh unit has no tailnet, so
+# tailscale0 must be ignored or Janus offers a dead ICE candidate and WebRTC never
+# delivers (falls to MJPEG forever). magicbridge-net flips this live when Tailscale
+# goes up/down; this just makes the FIRST boot correct before the sidecar runs.
+JCFG="$R/etc/kvmd/janus/janus.jcfg"
+if [[ -f "$JCFG" ]]; then
+    if grep -qE 'ice_ignore_list' "$JCFG"; then
+        sed -i -E 's/ice_ignore_list\s*=\s*"[^"]*"/ice_ignore_list = "tailscale0"/' "$JCFG"
+    else
+        sed -i -E 's/(nat:\s*\{)/\1\n\tice_ignore_list = "tailscale0"/' "$JCFG"
+    fi
+    ok "janus ICE default set (ignore tailscale0 until tailnet is up)"
+fi
 if [[ -f "$RR/kvmd-overrides/override.d/00-magicbridge.yaml" ]]; then
     install -Dm644 "$RR/kvmd-overrides/override.d/00-magicbridge.yaml" \
                    "$R/etc/kvmd/override.d/00-magicbridge.yaml"

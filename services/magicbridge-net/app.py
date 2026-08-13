@@ -461,6 +461,12 @@ async def tailscale_ctl(request):
         if sh("bash", "-c", "command -v tailscale")[0] != 0:   # cheap: stays inline
             return web.json_response({"ok": False, "error": "tailscale not installed — run install first"}, status=400)
         rc, out, login_url = await run_blocking(_tailscale_updown_blocking, action)
+        # Tailnet state just changed → re-tune Janus ICE so remote WebRTC gains (up) or
+        # loses (down) the tailscale0 candidate. Best-effort; never fail the up/down.
+        try:
+            await run_blocking(_janus_ice_tune_blocking)
+        except Exception as _e:
+            log.warning("janus ICE re-tune after tailscale %s failed: %s", action, _e)
     else:
         rc, out = await sh_a("tailscale", "status", timeout=10)
     resp = {"ok": rc == 0, "action": action, "detail": out[:1500]}
@@ -689,6 +695,69 @@ def _ro():
     # symmetric with _rw() and mbcommon._fs (bug F — the old `|| true` could leave
     # the rootfs writable on any build without the helper).
     sh("bash", "-c", "command -v ro >/dev/null && ro || mount -o remount,ro /")
+
+
+# ---- Janus ICE tuning: never offer a DEAD tailscale0 candidate (DIY A1) --------
+# Janus gathers an ICE host candidate from EVERY up interface, tailscale0 included.
+# tailscale0 stays UP even when the tailnet is OFFLINE, so that candidate is
+# unreachable and every media send to it errors ("only sent -1 bytes?") — the browser
+# never gets a frame, hits its connect timeout, and drops to MJPEG. Forever. This was
+# the single biggest WebRTC bug on the DIY sibling.
+#
+# The nuance (do NOT just blacklist tailscale0 permanently): that kills low-latency
+# remote WebRTC, which is exactly what the tailnet is for when you're off-LAN. Decide
+# from LIVE tailnet state — allow tailscale0 when the tailnet is Running, skip it
+# otherwise. kvmd-janus is restarted ONLY when the value actually flips.
+JANUS_JCFG = "/etc/kvmd/janus/janus.jcfg"
+
+
+def _tailnet_up() -> bool:
+    import json
+    rc, out = sh("tailscale", "status", "--json", timeout=8)
+    if rc != 0 or not out.strip():
+        return False
+    try:
+        d = json.loads(out)
+    except Exception:
+        return False
+    # Running backend AND at least one assigned tailnet IP = a usable path.
+    return d.get("BackendState") == "Running" and bool(d.get("TailscaleIPs"))
+
+
+def _janus_ice_set(ignore: str) -> bool:
+    """Set nat.ice_ignore_list in janus.jcfg to `ignore`. Returns True iff it changed."""
+    try:
+        txt = open(JANUS_JCFG).read()
+    except OSError:
+        return False
+    cur = re.search(r'ice_ignore_list\s*=\s*"([^"]*)"', txt)
+    if cur is not None:
+        if cur.group(1) == ignore:
+            return False                       # already correct: no write, no restart
+        new = txt[:cur.start(1)] + ignore + txt[cur.end(1):]
+    else:
+        m = re.search(r'nat:\s*\{', txt)       # inject inside the nat { } block
+        if not m:
+            return False
+        new = txt[:m.end()] + ('\n\tice_ignore_list = "%s"' % ignore) + txt[m.end():]
+    _rw()
+    try:
+        tmp = JANUS_JCFG + ".mbtmp"            # atomic replace so a crash never truncates it
+        with open(tmp, "w") as f:
+            f.write(new); f.flush(); os.fsync(f.fileno())
+        os.replace(tmp, JANUS_JCFG)
+    finally:
+        _ro()
+    return True
+
+
+def _janus_ice_tune_blocking() -> bool:
+    """Match janus ICE to tailnet state; restart kvmd-janus only on a real change."""
+    ignore = "" if _tailnet_up() else "tailscale0"
+    if _janus_ice_set(ignore):
+        sh("systemctl", "restart", "kvmd-janus", timeout=25)
+        return True
+    return False
 
 
 # ---- deployed-commit stamp (item 31) --------------------------------
@@ -1131,8 +1200,19 @@ async def update_apply(_):
                               "structural_ok": struct_ok, "detail": out[-1500:]})
 
 
+async def _on_startup(_app):
+    # Apply the correct Janus ICE ignore-list for the CURRENT tailnet state at boot,
+    # so a fresh/LAN unit never ships a dead tailscale0 candidate (DIY A1). Offloaded
+    # so a slow `tailscale status` can't stall aiohttp startup; best-effort.
+    try:
+        await run_blocking(_janus_ice_tune_blocking)
+    except Exception as _e:
+        log.warning("janus ICE tune at startup failed: %s", _e)
+
+
 def build_app():
     app = web.Application()
+    app.on_startup.append(_on_startup)
     app.add_routes([
         web.get("/health", health),
         web.get("/sys", sysinfo),
